@@ -3,22 +3,26 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>AI 大模型工作台 · AI---WQS</title>
-    <link rel="stylesheet" href="/styles.css" />
-    <script src="/app.js" defer></script>
+    <meta name="theme-color" content="#5550df" />
+    <meta
+      name="description"
+      content="智作台，让想法有处落地。集中管理 AI 对话、常用提示词、知识资料与工作任务。"
+    />
+    <title>智作台 · AI 大模型工作台</title>
+    <link rel="icon" type="image/svg+xml" href="./favicon.svg" />
+    <link rel="stylesheet" href="./styles.css" />
+    <script type="module" src="./app.js"></script>
   </head>
   <body>
-    <main>
-      <p class="eyebrow">AI---WQS / 0.1.0</p>
-      <h1>AI 大模型工作台</h1>
-      <p>最小项目骨架已就绪。当前入口用于验证页面与本地服务的连接。</p>
-      <section aria-labelledby="health-title">
-        <h2 id="health-title">服务状态</h2>
-        <p id="status" role="status" aria-live="polite">正在检查服务…</p>
-        <button id="check" type="button">重新检查</button>
-      </section>
-      <p class="note">当前版本仅包含页面入口与健康检查，尚未接入模型服务。</p>
-      <noscript><p>请启用 JavaScript，或直接访问 <a href="/api/health">健康检查接口</a>。</p></noscript>
-    </main>
+    <a class="skip-link" href="#main">跳到主要内容</a>
+    <div id="app"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+    <dialog id="dialog" aria-labelledby="dialog-title"></dialog>
+    <noscript
+      ><main class="no-script">
+        <h1>智作台</h1>
+        <p>请启用 JavaScript，以使用提示词库、本地对话和资料管理。</p>
+      </main></noscript
+    >
   </body>
 </html>
