@@ -45,6 +45,24 @@ npm run build # 生成仅含公开静态资源的 dist/
 
 `GET /api/health` 是本地 Node 服务的健康检查，只表示服务可达，不表示 AI 已连接。静态部署不提供此接口，前端也不依赖它。
 
+## GPT / Codex + GitHub + Docker Desktop
+
+开发流程：**GPT / Codex 修改代码 → GitHub 分支与 PR → 自动验收 → Linux 本机更新 → Docker Desktop 运行**。
+
+这套开发流程无需 OpenAI API 密钥。当前工作台仍为前端演示，真实模型接入是独立的后续工作。
+
+Linux 本机已有 Git 和 Docker Desktop 时，获取本仓库代码并打开 Docker Desktop，然后在项目目录运行：
+
+```bash
+bash scripts/start-linux.sh
+```
+
+打开 <http://127.0.0.1:3000>，在 Docker Desktop 的 Containers 面板查看 `ai-wqs`。启动脚本优先使用 `desktop-linux`，不会改变全局 Docker context。端口被占用时，运行 `WORKBENCH_PORT=3001 bash scripts/start-linux.sh`，随后访问 3001 端口。
+
+GitHub 的 `验收工作台` 工作流会检查应用，并实际构建、运行和检查 Docker 容器。原有 GitHub Pages 发布流程继续保留。
+
+本机更新、开发挂载、查看日志与常见问题见 [三者协作指南](docs/development-workflow.md)。
+
 ## 部署到 GitHub Pages
 
 `dist/` 是可独立托管的静态站点，使用相对资源路径和 hash 导航，支持 GitHub Pages 的仓库子路径。
@@ -54,7 +72,7 @@ npm run build # 生成仅含公开静态资源的 dist/
 3. `部署 GitHub Pages` 工作流在相关代码推送到 `main` 后运行，也可在 Actions 手动运行。
 4. 工作流依次执行安装元数据检查、`npm test`、静态构建和 Pages 发布。最终网址以部署结果为准。
 
-仅提交工作流文件不等于已发布；需要工作流成功且 Pages 配置有效。静态站点不需要服务器、数据库或任何密钥。`验收工作台` CI 在 PR、`main` 和 `feat/**` 分支上运行。
+仅提交工作流文件不等于已发布；需要工作流成功且 Pages 配置有效。静态站点不需要服务器、数据库或任何密钥。`验收工作台` CI 在 PR、`main`、`feat/**` 和 `codex/**` 分支上运行。
 
 也可将 `npm run build` 生成的 `dist/` 交给其他静态托管服务。不要把仓库根目录整体作为公开静态目录。
 

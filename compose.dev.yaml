@@ -1,0 +1,4 @@
+services:
+  workbench:
+    volumes:
+      - ./public:/app/public:ro

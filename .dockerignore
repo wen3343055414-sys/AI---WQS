@@ -1,0 +1,13 @@
+.git
+.github
+.openai
+node_modules
+dist
+coverage
+.env
+.env.*
+!.env.example
+*.log
+docs
+README.md
+AGENTS.md

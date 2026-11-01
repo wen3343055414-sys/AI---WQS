@@ -2,7 +2,8 @@ name: 验收工作台
 on:
   pull_request:
   push:
-    branches: [main, "feat/**"]
+    branches: [main, "feat/**", "codex/**"]
+  workflow_dispatch:
 permissions:
   contents: read
 jobs:
@@ -17,3 +18,24 @@ jobs:
       - run: npm ci
       - run: npm test
       - run: npm run build
+  docker:
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Validate Compose configuration
+        run: docker compose config --quiet
+      - name: Build and start the workbench
+        run: docker compose up --build --detach --wait --wait-timeout 90
+      - name: Check container HTTP behavior
+        run: node scripts/check-container.mjs
+      - name: Show logs on failure
+        if: failure()
+        run: docker compose logs --no-color
+      - name: Stop the test container
+        if: always()
+        run: docker compose down

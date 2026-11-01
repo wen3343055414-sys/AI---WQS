@@ -1,0 +1,19 @@
+name: ai-wqs
+
+services:
+  workbench:
+    build:
+      context: .
+      target: runtime
+    image: ai-wqs:local
+    ports:
+      - "127.0.0.1:${WORKBENCH_PORT:-3000}:3000"
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
