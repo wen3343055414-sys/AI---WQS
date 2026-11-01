@@ -1947,3 +1947,27 @@ dialog::backdrop {
 .brand-name {
   color: var(--text);
 }
+
+/* Local server authentication and workspace synchronization. */
+.server-locked #app{visibility:hidden}
+.server-access{border:1px solid var(--line);border-radius:22px;background:var(--surface,#fff);color:var(--text,#23304b);padding:0;width:440px;max-width:calc(100vw - 32px);box-shadow:0 24px 80px #1b2a4d30;max-height:92vh}
+.server-access::backdrop{background:#edf2faed;backdrop-filter:blur(8px)}
+.server-login{padding:36px;display:flex;flex-direction:column;gap:17px}
+.server-login-mark{display:flex;align-items:center;justify-content:center;width:44px;height:44px;background:#4f63df;color:#fff;border-radius:13px;font-weight:700;font-size:23px}
+.server-login .server-eyebrow{font-size:11px;color:#7787aa;letter-spacing:1px;margin:0}
+.server-login h1{font-size:23px;line-height:1.5;letter-spacing:.2px;margin:0;font-weight:650}
+.server-login>p{font-size:12px;line-height:1.9;color:var(--muted,#7b87a0);margin:0}
+.server-login label{font-size:12px;display:flex;flex-direction:column;gap:8px}
+.server-login input{border:1px solid var(--line,#e1e7f3);background:var(--surface,#fff);color:inherit;border-radius:9px;padding:12px;font:inherit;width:100%}
+.server-login input:focus{outline:2px solid #a5b2f3;outline-offset:2px}
+.server-login .btn{justify-content:center;min-height:44px}
+.server-login small{font-size:10px;line-height:1.8;color:var(--muted,#8190ab);text-align:center}
+.server-login .server-auth-error{color:#ce4d66;font-size:11px;min-height:0}
+.server-sync-label{font-size:10px;color:var(--muted,#75829e);max-width:185px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.sync-banner{display:flex;align-items:center;gap:12px;flex-wrap:wrap;border:1px solid #d9e0ff;background:#eff3ff;color:#4b5e99;border-radius:10px;padding:13px 16px;margin-bottom:20px;font-size:11px;line-height:1.8}
+.sync-banner[hidden]{display:none}
+.sync-banner>span{flex:1;min-width:200px}
+.sync-banner .btn{font-size:10px;padding:7px 10px}
+[data-theme="dark"] .server-access::backdrop{background:#172239ed}
+[data-theme="dark"] .sync-banner{background:#28354f;color:#b4c6ef;border-color:#3b4c6d}
+@media(max-width:760px){.server-sync-label{display:none}.server-login{padding:27px}.server-login h1{font-size:21px}.sync-banner{font-size:10px;padding:12px}.sync-banner>span{min-width:100%}}

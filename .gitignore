@@ -42,3 +42,8 @@ coverage/
 !.env.example
 .DS_Store
 dist/
+data/
+__pycache__/
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal

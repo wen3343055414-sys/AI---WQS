@@ -1,98 +1,89 @@
-# 智作台 · AI---WQS
+# 智作台 · 本机服务器版
 
-一个中文 AI 工作台，把常用提示词、对话、知识资料和任务记录放在同一个地方。浅色背景、靛蓝强调色，支持桌面与手机，以及深色主题。
+中文 AI 工作台，提供前端界面、数据后端、SQLite 数据库及 Linux Docker Desktop 部署。在 GPT / Codex 中开发代码，通过 GitHub 保存版本，由本机后台服务自动部署通过检查的新提交。
 
-**当前版本为可交互的演示版，不调用任何模型 API。** 所有助手消息和任务均明确标记为演示，不会将输入发送给模型。无需 API 密钥。
+**工作空间数据后端已实现；模型回复仍为明确标注的演示，尚未调用模型 API。** 开发、保存和部署流程无需 OpenAI API 密钥。
 
-## 已实现
+## 第一次安装
 
-- **首页**：快速输入、写文案 / 总结文档 / 翻译润色 / 分析数据 / 头脑风暴入口、收藏提示词、最近任务和实际本地记录计数。
-- **AI 对话**：多轮会话、历史记录、输入草稿、安全的 Markdown 子集展示、消息复制、重新显示演示消息、导出与删除会话。Enter 发送，Shift + Enter 换行，兼容中文输入法。
-- **提示词库**：写作、营销、编程、办公、学习五类模板；搜索、收藏、新建、编辑、删除，一键带入新对话。
-- **知识库**：选择或拖入文件、文本预览、标签编辑、正文搜索、删除和带入对话。
-- **任务记录**：自动记录演示对话，支持类型筛选、搜索、回到关联会话和 JSON 导出。删除会话时同步清理关联任务。
-- **设置**：浅色 / 深色 / 跟随系统、演示助手标签切换、模型接入说明、完整 JSON 备份与恢复、确认后重置。
-- **全局搜索**：搜索提示词、会话正文、资料正文和任务。Ctrl / ⌘ + K 打开，Esc 关闭。
-
-## 数据与演示边界
-
-- 内容存储于当前站点、当前浏览器的 `localStorage`，不提供账号登录、云端保存、团队共享或跨设备同步。不同部署地址的数据彼此独立，可用 JSON 备份迁移。
-- 刷新后可恢复已保存数据；尚未发送的输入草稿只在当前页面会话内保留。请定期从设置导出备份。
-- TXT、Markdown、CSV、JSON 读取 UTF-8 文本。每个文件不超过 1 MB，资料正文总计不超过 150 万字符；每类记录最多 1,000 条，每段会话最多 2,000 条消息。浏览器实际存储配额可能更小，写入失败会明确提示，不冒充已保存。
-- PDF、Word、图片等仅记录文件名、大小、标签和日期，不保存二进制、不解析、不上传。不存在向量索引或语义检索。
-- 对话输入最多 20,000 字符。长资料需从预览中复制所需段落。
-- 演示助手切换仅改变标签；重新生成仅重新显示演示说明。没有伪造的真实模型回答、执行成功状态或示例任务成果。
-- Markdown 仅支持标题、段落、列表、粗体、行内代码和代码块。原始 HTML、链接和图片作为文本展示。
-- 前端不接收 API 密钥。后续真实模型接入必须通过服务端实现，并补齐鉴权、限流、超时与错误处理。
-
-## 本地运行
-
-要求 **Node.js 24 LTS（24.10.0 或以上的 24.x）**，无需第三方运行时或开发依赖。
+Linux 本机需要 Git、Python 3 和已启动的 Docker Desktop。以日常使用 Docker Desktop 的用户运行：
 
 ```bash
-npm start
+git clone --branch codex/gpt-docker-github https://github.com/wen3343055414-sys/AI---WQS.git
+cd AI---WQS
+bash scripts/install-local-server.sh --branch codex/gpt-docker-github
 ```
 
-打开 <http://127.0.0.1:3000>。默认监听 `127.0.0.1:3000`，按 Ctrl+C 停止。
+打开 **http://127.0.0.1:3000**，首次访问在网页设置密码。Docker Desktop → Containers 中会出现 `ai-wqs-server`，包含 `frontend` 和 `backend`。
 
-可选：复制 `.env.example` 为 `.env`，修改 `HOST` 和 `PORT`。系统环境变量优先；没有 `.env` 也能启动。需要局域网访问时显式使用 `HOST=0.0.0.0`。
+上面跟随当前开发分支，适合在 GPT 中继续迭代。功能合并到主分支后，可重新运行安装脚本并指定 `--branch main`。端口被占用时加 `--port 3001`；局域网访问加 `--bind 0.0.0.0`。
+
+## 自动同步
+
+```mermaid
+flowchart LR
+    GPT[GPT / Codex 修改代码] --> GitHub[GitHub 跟随分支]
+    GitHub --> CI[自动测试和容器检查]
+    CI --> Update[本机每分钟检查更新]
+    Update --> Front[Docker 前端 Nginx]
+    Update --> Back[Docker 后端 Node.js]
+    Front <--> Back
+    Back <--> DB[(本机 SQLite 持久卷)]
+```
+
+- **代码版本**：本机跟随选定分支，只部署同一提交通过验收后的版本。GitHub 分支与 PR 继续作为开发和审阅入口。
+- **业务数据**：会话、提示词、资料、任务和设置由后端统一保存。前端自动保存，其他已登录页面约每 8 秒同步；并发冲突保留本页内容并提示处理。
+- **升级与备份**：升级前及运行期间每天备份数据库，保留最近 30 份。容器重建保留数据，新版启动失败时恢复上一代码版本。
+- **浏览器版本**：无未完成输入时自动刷新到新版本；正在编辑时保留输入并提示刷新。
+
+GitHub 保存代码与公开开发摘要，业务数据保存在本机数据库。自动更新需要电脑开机、Docker 引擎运行并能连接 GitHub。Docker Desktop 使用用户登录会话；本配置不保证退出登录或休眠期间持续提供服务。
+
+## 已有功能
+
+首页、AI 演示对话、提示词管理与收藏、知识资料与正文搜索、任务记录、全局搜索、深色主题、JSON 备份恢复，以及本机登录、数据库保存、同步状态和运行版本。
+
+首次登录空数据库时，会迁入同一站点原有的有效浏览器数据。支持 UTF-8 文本资料；容量边界见 [服务器使用指南](docs/local-server.md)。
+
+## 日常使用
+
+在 GPT / Codex 中选择这个仓库和本机跟随的分支修改代码。提交推送后，本机等待 CI 成功，再自动更新前后端。其他分支的修改需要先合入跟随分支。
 
 ```bash
-npm run dev   # 服务端修改后自动重启；前端修改后刷新页面
-npm test      # Node.js 内置测试，自动启动独立 HTTP 服务，无需个人配置
-npm run build # 生成仅含公开静态资源的 dist/
+# 本机版本和自动更新日志
+python3 ~/.local/share/ai-wqs-server/deployer.py status
+journalctl --user -u ai-wqs-update.service -n 60
+systemctl --user status ai-wqs-update.timer
+
+# 立即更新、备份或回退
+python3 ~/.local/share/ai-wqs-server/deployer.py update
+python3 ~/.local/share/ai-wqs-server/deployer.py backup
+python3 ~/.local/share/ai-wqs-server/deployer.py rollback
 ```
 
-`GET /api/health` 是本地 Node 服务的健康检查，只表示服务可达，不表示 AI 已连接。静态部署不提供此接口，前端也不依赖它。
+自定义 XDG_DATA_HOME 时使用对应数据目录。完整说明见 [服务器使用指南](docs/local-server.md)。
 
-## GPT / Codex + GitHub + Docker Desktop
+## 开发与验证
 
-开发流程：**GPT / Codex 修改代码 → GitHub 分支与 PR → 自动验收 → Linux 本机更新 → Docker Desktop 运行**。
-
-这套开发流程无需 OpenAI API 密钥。当前工作台仍为前端演示，真实模型接入是独立的后续工作。
-
-Linux 本机已有 Git 和 Docker Desktop 时，获取本仓库代码并打开 Docker Desktop，然后在项目目录运行：
+Node.js 24.10.0+，零第三方运行依赖：
 
 ```bash
-bash scripts/start-linux.sh
+npm start             # http://127.0.0.1:3000，数据库在 ./data
+npm test
+python3 -m unittest discover -s tests -p 'test_*.py'
+npm run build
+docker compose config --quiet
 ```
 
-打开 <http://127.0.0.1:3000>，在 Docker Desktop 的 Containers 面板查看 `ai-wqs`。启动脚本优先使用 `desktop-linux`，不会改变全局 Docker context。端口被占用时，运行 `WORKBENCH_PORT=3001 bash scripts/start-linux.sh`，随后访问 3001 端口。
+手动启动 Docker 使用 `bash scripts/start-linux.sh`。直接修改前端可使用开发挂载：
 
-GitHub 的 `验收工作台` 工作流会检查应用，并实际构建、运行和检查 Docker 容器。原有 GitHub Pages 发布流程继续保留。
-
-本机更新、开发挂载、查看日志与常见问题见 [三者协作指南](docs/development-workflow.md)。
-
-## 部署到 GitHub Pages
-
-`dist/` 是可独立托管的静态站点，使用相对资源路径和 hash 导航，支持 GitHub Pages 的仓库子路径。
-
-1. 审查并合并功能 PR 到 `main`。仓库规则不允许代理自动合并。
-2. 在仓库 **Settings → Pages → Build and deployment** 中，将 Source 设为 **GitHub Actions**。
-3. `部署 GitHub Pages` 工作流在相关代码推送到 `main` 后运行，也可在 Actions 手动运行。
-4. 工作流依次执行安装元数据检查、`npm test`、静态构建和 Pages 发布。最终网址以部署结果为准。
-
-仅提交工作流文件不等于已发布；需要工作流成功且 Pages 配置有效。静态站点不需要服务器、数据库或任何密钥。`验收工作台` CI 在 PR、`main`、`feat/**` 和 `codex/**` 分支上运行。
-
-也可将 `npm run build` 生成的 `dist/` 交给其他静态托管服务。不要把仓库根目录整体作为公开静态目录。
-
-## 代码结构
-
-```text
-public/                 # 原生 HTML、CSS、ES Modules 与图标
-  app.js                # 六个页面、交互与浏览器事件
-  core.js               # 状态验证、存储、搜索、演示消息与安全文本展示
-src/server.js           # 零依赖 HTTP 服务、明确的静态资源白名单、健康检查
-scripts/build.mjs       # 静态部署产物，排除源码、配置、附件和凭据
-tests/                  # HTTP 验收与工作空间业务测试
-.github/workflows/      # 自动验收与 GitHub Pages 发布
-docs/worklog/           # 适合公开的开发摘要与验收结果
+```bash
+docker --context desktop-linux compose -f compose.yaml -f compose.dev.yaml up --build --detach --wait
 ```
 
-浏览器界面使用原生 `<dialog>`、键盘焦点管理、移动端导航、状态播报和减少动态效果偏好。所有用户内容在插入 HTML 前转义。Node 服务使用资源白名单、Content Security Policy、`nosniff` 和 Referrer Policy。
+CI 验证应用、更新器规则和实际前后端容器。`GET /api/health` 表示服务可用，`GET /api/status` 提供版本与登录状态，工作空间接口需要登录。
 
-## GitHub 保存规则
+## 静态部署与保存规则
 
-遵循 [AGENTS.md](AGENTS.md)：每次工作更新公开摘要，验证后提交并推送任务分支，使用 PR 交付，不自动合并、不强制推送。只有远端可读取的提交才算完成备份。这不是后台服务或实时同步机制。
+`npm run build` 仍生成可托管的 dist/，原有 GitHub Pages 工作流继续保留。静态版本使用浏览器保存，与本机数据库独立；数据库和自动部署通过本机 Docker 服务使用。
 
-不提交真实 `.env`、凭据、API 密钥、上传原始附件、个人信息、聊天全文、依赖目录或构建临时文件。前端用户数据和导出的备份也不进入源码仓库。
+遵循 [AGENTS.md](AGENTS.md)：验证后更新公开日志、提交推送任务分支，通过 PR 交付，不自动合并主分支。真实凭据、数据库、业务数据和聊天全文不进入公开代码仓库。

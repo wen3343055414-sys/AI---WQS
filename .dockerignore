@@ -11,3 +11,10 @@ coverage
 docs
 README.md
 AGENTS.md
+data
+__pycache__
+**/__pycache__
+**/*.pyc
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

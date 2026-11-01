@@ -3,17 +3,21 @@ import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
 import { fileURLToPath } from "node:url";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
 
 test(
   "真实进程启动、页面资源、健康接口与路由边界",
   { timeout: 15000 },
   async (t) => {
+    const data = await mkdtemp(path.join(tmpdir(), "wqs-smoke-"));
     const child = spawn(
       process.execPath,
       ["--env-file=.env.example", "src/server.js"],
       {
         cwd: fileURLToPath(new URL("..", import.meta.url)),
-        env: { ...process.env, HOST: "127.0.0.1", PORT: "0" },
+        env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATA_DIR: data },
         stdio: ["ignore", "pipe", "pipe"],
       },
     );
@@ -22,6 +26,7 @@ test(
       const closed = once(child, "close");
       child.kill();
       await closed;
+      await rm(data, { recursive: true, force: true });
     });
     let stderr = "";
     child.stderr.on("data", (chunk) => {

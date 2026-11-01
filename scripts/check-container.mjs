@@ -11,6 +11,10 @@ try {
   const health = await get("/api/health");
   assert.equal(health.status, 200);
   assert.deepEqual(await health.json(), { status: "ok", app: "AI---WQS" });
+  const status = await (await get("/api/status")).json();
+  assert.equal(status.mode, "server");
+  assert.equal(typeof status.serverId, "string");
+  assert.equal((await get("/api/workspace")).status, 401);
 
   const home = await get("/");
   assert.equal(home.status, 200);
@@ -18,14 +22,15 @@ try {
   assert.match(await home.text(), /AI 大模型工作台/);
 
   for (const [path, mime] of [
-    ["/app.js", "text/javascript"],
-    ["/core.js", "text/javascript"],
+    ["/app.js", "javascript"],
+    ["/core.js", "javascript"],
+    ["/sync.js", "javascript"],
     ["/styles.css", "text/css"],
     ["/favicon.svg", "image/svg+xml"],
   ]) {
     const asset = await get(path);
     assert.equal(asset.status, 200, path);
-    assert.ok(asset.headers.get("content-type").startsWith(mime), path);
+    assert.ok(asset.headers.get("content-type").includes(mime), path);
     assert.ok((await asset.text()).length > 0, path);
   }
 

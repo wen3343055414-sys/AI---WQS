@@ -7,6 +7,7 @@ import {
   uid,
   readState,
   saveState,
+  validateState,
   escapeHtml as e,
   markdown,
   demoReply,
@@ -15,6 +16,7 @@ import {
   searchWorkspace,
   STARTERS,
 } from "./core.js";
+import { WorkspaceSync } from "./sync.js";
 
 const paths = {
   spark:
@@ -89,6 +91,8 @@ const categoryStyle = {
 };
 const initial = readState({ getItem: (key) => localStorage.getItem(key) });
 let state = initial.state;
+let sync;
+let newServerVersion = "";
 let promptFilter = "全部",
   promptQuery = "",
   documentFilter = "全部",
@@ -120,9 +124,19 @@ function go(page, id = "") {
 function mutate(fn) {
   const next = structuredClone(state);
   const result = fn(next);
-  saveState(localStorage, next);
-  state = next;
+  persist(next);
   return result;
+}
+function persist(next) {
+  if (!validateState(next)) throw new Error("工作空间数据格式无效，未修改已有记录。");
+  if (sync?.mode === "server") {
+    if (!sync.authenticated) throw new Error("请先登录本机服务器。");
+    sync.enqueue(next);
+  } else {
+    if (sync?.mode === "connecting") throw new Error("正在连接服务器，请稍候。");
+    saveState(localStorage, next);
+  }
+  state = next;
 }
 function toast(message, error = false) {
   clearTimeout(toastTimer);
@@ -217,7 +231,7 @@ function homePage() {
           : "晚上好，留一点时间给灵感";
   const favorites = state.prompts.filter((p) => p.favorite).slice(0, 3);
   return `<div class="greeting">${icon("sun")}${hello}</div><div class="page-intro"><div><h1 tabindex="-1" id="page-title">把想法，变成<span>下一步。</span></h1><p>你的 AI 工作空间，让创作、思考与日常工作从容发生。</p></div><span class="date">${today()}</span></div>
-  ${composer(true)}<div class="privacy-line">${icon("shield")}演示模式 · 内容仅保存在当前浏览器，不会发送给模型</div>
+  ${composer(true)}<div class="privacy-line">${icon("shield")}模型演示 · ${sync?.mode === "server" ? "数据自动同步到本机数据库" : "内容保存在当前浏览器"}，不会发送给模型</div>
   ${section("从一个灵感开始", "为日常工作，找到更好的起点")}
   <div class="quick-grid">${STARTERS.map((s) => `<button class="quick-card" data-action="starter" data-id="${s.id}"><span class="tile-icon tone-${s.tone}">${icon(s.icon)}</span><strong>${s.title}</strong><small>${s.subtitle}</small></button>`).join("")}</div>
   <div class="dashboard-lower"><div>${section("常用提示词", "收藏好方法，下次直接用", '<a class="btn btn-quiet" href="#prompts">查看全部 ' + icon("arrow") + "</a>")}<div class="prompt-grid">${favorites.length ? favorites.map(promptCard).join("") : empty("star", "把好用的提示词收藏在这里", "去提示词库点亮星标，建立你的常用清单。", '<a class="btn" href="#prompts">浏览提示词库</a>')}</div>
@@ -331,7 +345,7 @@ function chatPage() {
     )
     .join(
       "",
-    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="demo-badge">演示模式</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
+    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge">模型演示</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
     session
       ? session.messages
           .map(
@@ -357,7 +371,7 @@ function chatPage() {
 function settingsPage() {
   return (
     heading("设置", "按你的习惯，整理这片工作空间。") +
-    `<div class="settings-grid"><div><section class="settings-card"><h2>${icon("sun")}外观与偏好</h2><p>让工作台呈现你喜欢的样子。</p><div class="setting-row"><div><strong>界面主题</strong><small>跟随系统或选择固定主题</small></div><div class="segmented" role="group" aria-label="界面主题">${[
+    `<div class="settings-grid"><div>${serverSettings()}<section class="settings-card"><h2>${icon("sun")}外观与偏好</h2><p>让工作台呈现你喜欢的样子。</p><div class="setting-row"><div><strong>界面主题</strong><small>跟随系统或选择固定主题</small></div><div class="segmented" role="group" aria-label="界面主题">${[
       ["light", "浅色"],
       ["dark", "深色"],
       ["system", "系统"],
@@ -373,8 +387,11 @@ function settingsPage() {
       )
       .join(
         "",
-      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>首版仅切换演示标签，不调用模型</small></div><select class="input" data-setting="model" aria-label="默认演示助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>接入模型后，才能获得真实的 AI 回答。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill">尚未连接</span></div>${notice("此版本不收集 API 密钥，也不向外部服务发送对话。实际接入需要在服务端配置密钥与鉴权。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>提示词、会话、资料和设置保存在当前浏览器，清除浏览器数据后会丢失。可导出 JSON 备份，再从备份恢复。</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.2.0 · 演示版</strong></div></section></aside></div>`
+      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>首版仅切换演示标签，不调用模型</small></div><select class="input" data-setting="model" aria-label="默认演示助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>接入模型后，才能获得真实的 AI 回答。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill">尚未连接</span></div>${notice("此版本不收集 API 密钥，也不向外部服务发送对话。实际接入需要在服务端配置密钥与鉴权。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
   );
+}
+function serverSettings() {
+  return `<section class="settings-card"><h2>${icon("shield")}本机服务器</h2><p>${sync?.mode === "server" ? "会话、提示词、资料与设置由本机数据库统一保存，其他已登录页面会自动同步。" : "静态部署使用浏览器保存。运行本机 Docker 服务后可启用数据库与自动同步。"}</p><div class="connection-state"><span>保存状态</span><strong data-server-label>${e(sync?.label || "正在连接")}</strong></div><div class="connection-state"><span>运行版本</span><strong data-server-version>${e(sync?.version?.slice(0, 12) || "静态演示版")}</strong></div><div class="settings-actions"><button type="button" class="btn" data-sync="retry">重新连接</button>${sync?.mode === "server" ? '<button type="button" class="btn" data-sync="logout">退出登录</button>' : ''}</div></section>`;
 }
 function render() {
   const textarea = document.querySelector("#message-input");
@@ -392,12 +409,13 @@ function render() {
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>本地演示版</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="demo-badge">演示模式</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1">${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 演示版 0.2</span></footer>'}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>本地演示版</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge">模型演示</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
   // The menu button needs one class attribute to remain available on small screens.
   document.querySelector("[data-menu-button]").classList.add("mobile-menu");
   document.querySelector("#sidebar").inert = mobile.matches;
   const messages = document.querySelector("#messages");
   if (messages) messages.scrollTop = messages.scrollHeight;
+  sync?.refreshStatus();
 }
 
 let confirmAction = null;
@@ -810,8 +828,7 @@ async function handleAction(target) {
         "确认重置",
         () => {
           const next = createInitialState();
-          saveState(localStorage, next);
-          state = next;
+          persist(next);
           drafts.clear();
           promptFilter = documentFilter = taskFilter = "全部";
           promptQuery = documentQuery = taskQuery = "";
@@ -835,7 +852,7 @@ async function handleAction(target) {
     case "connection-help":
       openDialog(
         "关于模型接入",
-        `<div class="dialog-body"><p>当前发布的是可交互的前端演示版，还没有配置模型后端。</p><ol class="help-list"><li>实际接入时，需要先选择模型服务与部署环境。</li><li>API 密钥应保存在服务端环境变量中，不写入页面、浏览器存储或公开仓库。</li><li>接入前需补齐身份验证、请求限流、超时和错误处理。</li></ol><p>演示助手的切换只用于体验界面，所有演示消息都有明确标记。</p></div>`,
+        `<div class="dialog-body"><p>当前已提供工作空间数据后端、登录和自动同步；模型对话仍使用明确标注的演示消息。</p><ol class="help-list"><li>实际接入时，需要先选择模型服务与部署环境。</li><li>API 密钥应保存在服务端环境变量中，不写入页面、浏览器存储或公开仓库。</li><li>接入前需补齐身份验证、请求限流、超时和错误处理。</li></ol><p>演示助手的切换只用于体验界面，所有演示消息都有明确标记。</p></div>`,
       );
       break;
     case "help":
@@ -975,8 +992,7 @@ document.addEventListener("change", async (event) => {
         `将替换当前本地数据：${next.prompts.length} 个提示词、${next.sessions.length} 段会话、${next.documents.length} 份资料。建议先导出现有数据。`,
         "替换并恢复",
         () => {
-          saveState(localStorage, next);
-          state = next;
+          persist(next);
           drafts.clear();
           promptFilter = documentFilter = taskFilter = "全部";
           promptQuery = documentQuery = taskQuery = "";
@@ -1076,3 +1092,19 @@ mobile.addEventListener("change", () => {
 });
 render();
 if (initial.warning) toast(initial.warning, true);
+sync = new WorkspaceSync({
+  onState(next) {
+    if (!validateState(next)) throw new Error("服务器数据格式异常，当前内容仍保留。");
+    state = next;
+    render();
+  },
+  onNotice: toast,
+  canApply: () => !dialog.open && !document.activeElement?.matches("input, textarea, select"),
+  canReload: () => !dialog.open && ![...drafts.values()].some(value => value.trim()) && !document.activeElement?.matches("input, textarea, select"),
+  onVersion(version) {
+    newServerVersion = version;
+    const banner = document.querySelector("#sync-version");
+    if (banner) banner.hidden = false;
+  },
+});
+sync.connect();

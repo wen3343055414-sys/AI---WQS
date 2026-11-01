@@ -1,4 +1,4 @@
 services:
-  workbench:
+  frontend:
     volumes:
-      - ./public:/app/public:ro
+      - ./public:/usr/share/nginx/html:ro

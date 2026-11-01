@@ -1,5 +1,11 @@
 import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
+import { WorkspaceStore } from "./store.js";
+import { createApi } from "./api.js";
+
+process.umask(0o077);
+const store = new WorkspaceStore(process.env.DATA_DIR || "./data");
+const api = createApi(store, process.env.APP_VERSION || "0.3.0-local");
 
 const host = process.env.HOST ?? "127.0.0.1";
 const portValue = process.env.PORT ?? "3000";
@@ -14,6 +20,7 @@ const assets = new Map([
   ["/styles.css", ["styles.css", "text/css; charset=utf-8"]],
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/core.js", ["core.js", "text/javascript; charset=utf-8"]],
+  ["/sync.js", ["sync.js", "text/javascript; charset=utf-8"]],
   ["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
 ]);
 
@@ -32,18 +39,17 @@ const server = createServer(async (req, res) => {
   const json = (status, body) =>
     send(status, "application/json; charset=utf-8", JSON.stringify(body));
 
-  if (req.method !== "GET" && req.method !== "HEAD") {
-    res.setHeader("Allow", "GET, HEAD");
-    return json(405, { error: "Method not allowed" });
-  }
   let pathname;
   try {
     pathname = new URL(req.url, "http://localhost").pathname;
   } catch {
     return json(400, { error: "Bad request" });
   }
-  if (pathname === "/api/health")
-    return json(200, { status: "ok", app: "AI---WQS" });
+  if (await api(req, res, pathname, json)) return;
+  if (req.method !== "GET" && req.method !== "HEAD") {
+    res.setHeader("Allow", "GET, HEAD");
+    return json(405, { error: "Method not allowed" });
+  }
   const asset = assets.get(pathname);
   if (!asset) return json(404, { error: "Not found" });
   try {
@@ -56,6 +62,8 @@ const server = createServer(async (req, res) => {
     json(500, { error: "Internal server error" });
   }
 });
+server.requestTimeout = 15000;
+server.headersTimeout = 10000;
 
 server.on("error", (error) => {
   console.error(
@@ -73,7 +81,7 @@ server.listen(Number(portValue), host, () => {
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
-    server.close(() => process.exit(0));
+    server.close(() => { store.close(); process.exit(0); });
     setTimeout(() => process.exit(1), 5000).unref();
   });
 }

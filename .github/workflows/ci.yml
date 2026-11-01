@@ -17,6 +17,10 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Verify local updater rules
+        run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Check installer syntax
+        run: bash -n scripts/install-local-server.sh scripts/start-linux.sh
       - run: npm run build
   docker:
     needs: test
@@ -38,4 +42,4 @@ jobs:
         run: docker compose logs --no-color
       - name: Stop the test container
         if: always()
-        run: docker compose down
+        run: docker compose down --volumes
