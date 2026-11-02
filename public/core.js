@@ -112,7 +112,7 @@ const prompts = [
   },
 ];
 export const uid = (prefix = "item") =>
-  `${prefix}-${globalThis.crypto.randomUUID()}`;
+  `${prefix}-${globalThis.crypto.randomUUID?.() ?? Array.from(globalThis.crypto.getRandomValues(new Uint8Array(16)), x => x.toString(16).padStart(2, "0")).join("")}`;
 export function createInitialState() {
   return {
     version: 1,

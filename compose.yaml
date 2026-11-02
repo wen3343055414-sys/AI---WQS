@@ -1,0 +1,51 @@
+name: ai-wqs
+
+services:
+  backend:
+    build:
+      context: .
+      target: runtime
+      args:
+        APP_VERSION: ${APP_VERSION:-local}
+    image: ai-wqs-backend:${APP_VERSION:-local}
+    expose:
+      - "3000"
+    volumes:
+      - workspace-data:/data
+    init: true
+    read_only: true
+    tmpfs:
+      - /tmp:size=16m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+
+  frontend:
+    build:
+      context: .
+      target: frontend
+    image: ai-wqs-frontend:${APP_VERSION:-local}
+    ports:
+      - "${WORKBENCH_BIND:-127.0.0.1}:${WORKBENCH_PORT:-3000}:8080"
+    depends_on:
+      backend:
+        condition: service_healthy
+    read_only: true
+    tmpfs:
+      - /tmp:size=32m
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-Y", "off", "-q", "--spider", "http://127.0.0.1:8080/api/health"]
+      interval: 15s
+      timeout: 3s
+      start_period: 5s
+      retries: 3
+
+volumes:
+  workspace-data:

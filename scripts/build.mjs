@@ -8,6 +8,7 @@ for (const name of [
   "styles.css",
   "app.js",
   "core.js",
+  "sync.js",
   "favicon.svg",
 ]) {
   await cp(
