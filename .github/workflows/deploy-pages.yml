@@ -40,6 +40,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: 检查 GitHub Pages 配置
+        uses: actions/configure-pages@v5
       - name: 发布静态工作台
         id: deployment
         uses: actions/deploy-pages@v4

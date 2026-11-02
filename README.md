@@ -56,6 +56,8 @@ npm run build # 生成仅含公开静态资源的 dist/
 
 仅提交工作流文件不等于已发布；需要工作流成功且 Pages 配置有效。静态站点不需要服务器、数据库或任何密钥。`验收工作台` CI 在 PR、`main` 和 `feat/**` 分支上运行。
 
+若 build 成功，但 deploy 报 `Failed to create deployment (status: 404)` 并提示 `Ensure GitHub Pages has been enabled`，先在 [Pages 设置](https://github.com/wen3343055414-sys/AI---WQS/settings/pages) 启用 Pages，并将 Source 设为 **GitHub Actions**、保存，再重新运行工作流。deploy 会先通过 `actions/configure-pages` 检查站点配置；此检查不会自动启用 Pages。不要为此添加 PAT、扩大工作流权限或修改静态资源路径。只重跑失败 job 时会复用原产物；若产物已过期或需要验证工作流修改，请在修复合并后完整重跑工作流。
+
 也可将 `npm run build` 生成的 `dist/` 交给其他静态托管服务。不要把仓库根目录整体作为公开静态目录。
 
 ## 代码结构
