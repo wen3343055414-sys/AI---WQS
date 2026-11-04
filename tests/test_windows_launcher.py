@@ -24,7 +24,7 @@ SOURCE = Path(__file__).parents[1] / 'admin'
 class LauncherTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
-        self.root = Path(self.temp.name)
+        self.root = Path(self.temp.name).resolve()
         self.home = self.root / 'AI-WQS-admin'
         self.home.mkdir()
         self.deployment = self.root / 'AI-WQS-local'
