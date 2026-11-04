@@ -177,7 +177,7 @@ export function validateState(value) {
             ["user", "assistant"].includes(m.role) &&
             isText(m.content) &&
             isTime(m.createdAt) &&
-            (m.role !== "assistant" || m.demo === true),
+            (m.role !== "assistant" || m.demo === true || (m.demo === false && isText(m.model, 200) && Boolean(m.model) && isId(m.requestId))),
         ),
     )
   )
@@ -208,7 +208,7 @@ export function validateState(value) {
         isId(t.id) &&
         isText(t.title, 100) &&
         isText(t.type, 30) &&
-        t.status === "demo" &&
+        ["demo", "pending", "success", "failed"].includes(t.status) &&
         isTime(t.createdAt) &&
         isId(t.sessionId),
     )
@@ -334,6 +334,41 @@ export function removeSession(state, id) {
   state.sessions = state.sessions.filter((s) => s.id !== id);
   state.tasks = state.tasks.filter((t) => t.sessionId !== id);
 }
+export function beginChat(state, sessionId, content, type = 'AI 对话') {
+  const text = content.trim(), now = new Date().toISOString();
+  let session = state.sessions.find(item => item.id === sessionId);
+  if (!text || text.length > 20_000) throw new Error('请输入 1–20,000 个字符。');
+  if (state.tasks.length >= 1000 || (!session && state.sessions.length >= 1000) || (session && session.messages.length > 1998)) throw new Error('记录数量已达上限，请先导出并删除部分历史。');
+  if (!session) {
+    session = { id: uid('session'), title: text.replace(/\s+/g, ' ').slice(0, 32), createdAt: now, updatedAt: now, messages: [] };
+    state.sessions.unshift(session);
+  }
+  const message = { id: uid('message'), role: 'user', content: text, createdAt: now };
+  session.messages.push(message); session.updatedAt = now;
+  const task = { id: uid('task'), requestId: uid('request'), assistant: state.settings.model, userMessageId: message.id, title: text.replace(/\s+/g, ' ').slice(0, 60), type, status: 'pending', createdAt: now, sessionId: session.id };
+  state.tasks.unshift(task);
+  return { sessionId: session.id, taskId: task.id };
+}
+export function chatMessages(session, userMessageId) {
+  const index = session.messages.findIndex(message => message.id === userMessageId && message.role === 'user');
+  if (index < 0) throw new Error('未找到需要回复的消息。');
+  const history = session.messages.slice(0, index + 1).filter(message => message.demo !== true).map(({ role, content }) => ({ role, content }));
+  if (history.length > 80 || history.reduce((size, message) => size + message.content.length, 0) > 120_000) throw new Error('此会话过长，请新建对话后继续。');
+  return history;
+}
+export function finishChat(state, taskId, result) {
+  const task = state.tasks.find(item => item.id === taskId), session = state.sessions.find(item => item.id === task?.sessionId);
+  if (!task || !session || task.status !== 'pending') throw new Error('对话记录已变化，无法写入回复。');
+  if (!result || typeof result.content !== 'string' || !result.content.trim() || result.content.length > 50_000 || typeof result.model !== 'string' || !result.model || result.model.length > 200 || result.requestId !== task.requestId) throw new Error('模型回复格式无效，未覆盖原有内容。');
+  const reply = { id: uid('message'), role: 'assistant', demo: false, content: result.content, model: result.model, requestId: result.requestId, usage: result.usage, finishReason: result.finishReason, createdAt: new Date().toISOString() };
+  const replaced = session.messages.findIndex(message => message.id === task.replaceMessageId && message.role === 'assistant');
+  if (replaced >= 0) session.messages[replaced] = { ...reply, id: task.replaceMessageId };
+  else {
+    const userIndex = session.messages.findIndex(message => message.id === task.userMessageId);
+    session.messages.splice(userIndex + 1, 0, reply);
+  }
+  session.updatedAt = reply.createdAt; task.status = 'success'; delete task.error;
+}
 export function searchWorkspace(state, query) {
   const q = query.trim().toLocaleLowerCase();
   if (!q) return [];
@@ -370,7 +405,7 @@ export function searchWorkspace(state, query) {
         kind: "task",
         id: t.id,
         title: t.title,
-        label: "任务记录 · 演示",
+        label: t.status === 'demo' ? "任务记录 · 历史演示" : "任务记录 · 模型对话",
       })),
   ].slice(0, 30);
 }

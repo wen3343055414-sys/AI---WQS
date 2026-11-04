@@ -10,8 +10,9 @@ import {
   validateState,
   escapeHtml as e,
   markdown,
-  demoReply,
-  recordExchange,
+  beginChat,
+  chatMessages,
+  finishChat,
   removeSession,
   searchWorkspace,
   STARTERS,
@@ -92,6 +93,8 @@ const categoryStyle = {
 const initial = readState({ getItem: (key) => localStorage.getItem(key) });
 let state = initial.state;
 let sync;
+let modelConfig = { ready: false, model: '', provider: '', message: '正在读取服务端模型配置' };
+let modelConfigPending = false, modelConfigChecked = 0, chatPending = null;
 let newServerVersion = "";
 let promptFilter = "全部",
   promptQuery = "",
@@ -138,6 +141,69 @@ function persist(next) {
   }
   state = next;
 }
+function modelPrivacy() {
+  return modelConfig.ready ? `已连接 ${modelConfig.provider} · 对话和所选文本将发送给模型服务，密钥由服务端保管` : modelConfig.message;
+}
+async function refreshModelConfig(force = false) {
+  if (!sync?.authenticated || modelConfigPending || (!force && Date.now() - modelConfigChecked < 5000)) return;
+  modelConfigPending = true;
+  try {
+    const value = await sync.request('/api/model-config');
+    const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
+    modelConfig = value;
+    if (changed && !chatPending && !dialog.open && !document.activeElement?.matches('input,textarea,select')) render();
+    document.querySelectorAll('[data-model-label]').forEach(element => { element.textContent = value.ready ? value.model : '模型未就绪'; });
+    document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = value.ready ? `已连接 ${value.provider} · ${value.model}` : value.message; });
+    const send = document.querySelector('#message-form button[type=submit]');
+    if (send) send.disabled = Boolean(chatPending || !value.ready);
+  } catch { modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
+  finally { modelConfigChecked = Date.now(); modelConfigPending = false; }
+}
+function chatRequestNotice(session) {
+  if (!session) return '';
+  if (chatPending?.sessionId === session.id) return '<div class="model-request-status" role="status"><span class="model-spinner"></span>模型正在回复，请稍候…</div>';
+  const task = state.tasks.find(item => item.sessionId === session.id);
+  if (!task || !['pending', 'failed'].includes(task.status) || !task.requestId) return '';
+  return `<div class="model-request-status failed" role="status"><span>${e(task.error || '上次请求结果尚未确认，可尝试恢复回复。')}</span>${button(task.status === 'pending' ? 'resume-chat' : 'retry-chat', task.status === 'pending' ? '恢复回复' : '重新请求', '', 'btn', `data-id="${task.id}"`)}</div>`;
+}
+async function sendChat(content, draftKey) {
+  if (chatPending) throw new Error('请等待当前回复完成。');
+  await refreshModelConfig(true);
+  if (chatPending) throw new Error('请等待当前回复完成。');
+  if (!modelConfig.ready || !sync?.authenticated) throw new Error(modelConfig.message || '请先登录并在服务端配置模型接口。');
+  const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType));
+  drafts.delete(draftKey);
+  const input = document.querySelector('#message-input'); if (input) input.value = '';
+  pendingType = 'AI 对话'; go('chat', result.sessionId);
+  await performChat(result.taskId);
+}
+async function performChat(taskId) {
+  if (chatPending) throw new Error('已有对话正在回复。');
+  const task = state.tasks.find(item => item.id === taskId);
+  if (!task) throw new Error('对话任务不存在。');
+  chatPending = { taskId, sessionId: task.sessionId };
+  render();
+  try {
+    const session = state.sessions.find(item => item.id === task.sessionId);
+    const input = { requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId) };
+    const until = Date.now() + 15000;
+    while (sync.pending || sync.busy) {
+      if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
+      if (!sync.authenticated || Date.now() > until) throw new Error('对话尚未保存到本机，请恢复连接后重新请求。');
+      if (!sync.busy) await sync.flush();
+      if (sync.pending || sync.busy) await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    const result = await sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(140000) });
+    mutate(next => finishChat(next, taskId, result));
+    if (result.finishReason === 'length') toast('回复达到长度上限，可以发送“请继续”。');
+  } catch (error) {
+    const message = error.name === 'TimeoutError' ? '等待回复超时，请检查服务端后重新请求。' : error.message;
+    mutate(next => { const item = next.tasks.find(item => item.id === taskId); if (item) { item.status = 'failed'; item.error = message.slice(0, 500); } });
+    toast(message, true);
+  } finally { chatPending = null; render(); }
+}
+window.addEventListener('beforeunload', event => { if (chatPending) { event.preventDefault(); event.returnValue = ''; } });
+setInterval(() => { if (!document.hidden) refreshModelConfig(); }, 8000);
 function toast(message, error = false) {
   clearTimeout(toastTimer);
   const target = document.querySelector("#toast");
@@ -193,7 +259,7 @@ function modelOptions() {
   return Object.entries(MODELS)
     .map(
       ([key, label]) =>
-        `<option value="${key}" ${state.settings.model === key ? "selected" : ""}>${label} · 演示</option>`,
+        `<option value="${key}" ${state.settings.model === key ? "selected" : ""}>${label}</option>`,
     )
     .join("");
 }
@@ -202,7 +268,7 @@ function composer(home = false) {
   return `<form class="composer" id="message-form" data-draft="${e(key)}">
     ${home ? `<label class="composer-label" for="message-input">${icon("spark")}今天，想一起完成什么？</label>` : '<label class="visually-hidden" for="message-input">输入消息</label>'}
     <textarea id="message-input" name="message" maxlength="20000" required placeholder="${home ? "写下你的想法，或者从下方选择一个灵感起点…" : "输入你的问题，继续这段思考…"}">${e(drafts.get(key) || "")}</textarea>
-    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}<select class="model-select" aria-label="选择演示助手" data-setting="model">${modelOptions()}</select><span class="composer-hint">Enter 发送 · Shift + Enter 换行</span></div><button type="submit" class="btn btn-primary">${home ? "开始对话" : "发送"}${icon("arrow")}</button></div>
+    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}<select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select><span class="composer-hint" data-model-label>${e(modelConfig.ready ? modelConfig.model : '等待服务端配置')}</span></div><button type="submit" class="btn btn-primary" ${chatPending || !modelConfig.ready ? 'disabled' : ''}>${chatPending ? '正在回复…' : home ? '开始对话' : '发送'}${icon("arrow")}</button></div>
   </form>`;
 }
 function promptCard(p) {
@@ -211,7 +277,7 @@ function promptCard(p) {
 function taskTable(tasks, filtered = false) {
   if (!tasks.length)
     return `<div class="table-wrap">${empty("history", filtered ? "没有符合条件的任务" : "下一件好作品，从这里开始", filtered ? "试试其他关键词或类型。" : "发起一次对话后，你的工作记录会出现在这里。", filtered ? "" : button("new-chat", "开始第一次对话", "plus", "btn"))}</div>`;
-  return `<div class="table-wrap"><table><caption class="visually-hidden">${filtered ? "筛选后的任务记录" : "最近的任务记录"}</caption><thead><tr><th scope="col">任务名称</th><th scope="col">类型</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">操作</th></tr></thead><tbody>${tasks.map((t) => `<tr><td><div class="task-name">${icon("chat")}<span class="task-title" title="${e(t.title)}">${e(t.title)}</span></div></td><td class="table-type">${e(t.type)}</td><td><span class="status-pill">演示已记录</span></td><td class="muted">${dateText(t.createdAt, true)}</td><td>${button("open-session", "查看", "", "btn btn-quiet", `data-id="${t.sessionId}"`)}</td></tr>`).join("")}</tbody></table></div>`;
+  return `<div class="table-wrap"><table><caption class="visually-hidden">${filtered ? "筛选后的任务记录" : "最近的任务记录"}</caption><thead><tr><th scope="col">任务名称</th><th scope="col">类型</th><th scope="col">状态</th><th scope="col">创建时间</th><th scope="col">操作</th></tr></thead><tbody>${tasks.map((t) => `<tr><td><div class="task-name">${icon("chat")}<span class="task-title" title="${e(t.title)}">${e(t.title)}</span></div></td><td class="table-type">${e(t.type)}</td><td><span class="status-pill">${({demo:"历史演示",pending:"等待回复",success:"已回复",failed:"请求失败"})[t.status] || "已记录"}</span></td><td class="muted">${dateText(t.createdAt, true)}</td><td>${button("open-session", "查看", "", "btn btn-quiet", `data-id="${t.sessionId}"`)}</td></tr>`).join("")}</tbody></table></div>`;
 }
 function homePage() {
   const hour = Number(
@@ -231,7 +297,7 @@ function homePage() {
           : "晚上好，留一点时间给灵感";
   const favorites = state.prompts.filter((p) => p.favorite).slice(0, 3);
   return `<div class="greeting">${icon("sun")}${hello}</div><div class="page-intro"><div><h1 tabindex="-1" id="page-title">把想法，变成<span>下一步。</span></h1><p>你的 AI 工作空间，让创作、思考与日常工作从容发生。</p></div><span class="date">${today()}</span></div>
-  ${composer(true)}<div class="privacy-line">${icon("shield")}模型演示 · ${sync?.mode === "server" ? "数据自动同步到本机数据库" : "内容保存在当前浏览器"}，不会发送给模型</div>
+  ${composer(true)}<div class="privacy-line">${icon("shield")}${e(modelPrivacy())}</div>
   ${section("从一个灵感开始", "为日常工作，找到更好的起点")}
   <div class="quick-grid">${STARTERS.map((s) => `<button class="quick-card" data-action="starter" data-id="${s.id}"><span class="tile-icon tone-${s.tone}">${icon(s.icon)}</span><strong>${s.title}</strong><small>${s.subtitle}</small></button>`).join("")}</div>
   <div class="dashboard-lower"><div>${section("常用提示词", "收藏好方法，下次直接用", '<a class="btn btn-quiet" href="#prompts">查看全部 ' + icon("arrow") + "</a>")}<div class="prompt-grid">${favorites.length ? favorites.map(promptCard).join("") : empty("star", "把好用的提示词收藏在这里", "去提示词库点亮星标，建立你的常用清单。", '<a class="btn" href="#prompts">浏览提示词库</a>')}</div>
@@ -328,7 +394,7 @@ function tasksPage() {
       button("export-tasks", "导出记录", "download", "btn"),
     ) +
     notice(
-      "所有任务均为演示对话记录。“演示已记录”仅表示输入已保存，不代表模型已执行或任务已完成。",
+      "任务记录显示真实模型请求结果；旧会话中的演示记录仍保留原标记。",
     ) +
     `<div class="toolbar">${tabs(["全部", ...new Set(state.tasks.map((t) => t.type))], taskFilter, "task-filter")}${searchField("task-search", "搜索任务…", taskQuery)}</div><div id="task-results" aria-live="polite">${taskResults()}</div>`
   );
@@ -345,15 +411,15 @@ function chatPage() {
     )
     .join(
       "",
-    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge">模型演示</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
+    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(modelConfig.ready ? modelConfig.model : "模型未就绪")}</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
     session
       ? session.messages
           .map(
             (m) =>
-              `<article class="message ${m.role}"><div class="avatar">${m.role === "user" ? "我" : icon("spark")}</div><div class="message-body"><div class="message-label">${m.role === "user" ? "你" : `智作台 <span class="demo-badge">演示消息</span>`}<time datetime="${e(m.createdAt)}">${dateText(m.createdAt, true)}</time></div><div class="message-content">${m.role === "user" ? e(m.content) : markdown(m.content)}</div><div class="message-actions">${button("copy-message", `${icon("copy")} 复制`, "", "btn btn-quiet", `data-id="${m.id}"`)}${m.role === "assistant" ? button("regenerate", `${icon("refresh")} 重新生成（演示）`, "", "btn btn-quiet", `data-id="${m.id}"`) : ""}</div></div></article>`,
+              `<article class="message ${m.role}"><div class="avatar">${m.role === "user" ? "我" : icon("spark")}</div><div class="message-body"><div class="message-label">${m.role === "user" ? "你" : `智作台 <span class="demo-badge">${m.demo ? "历史演示消息" : e(m.model)}</span>`}<time datetime="${e(m.createdAt)}">${dateText(m.createdAt, true)}</time></div><div class="message-content">${m.role === "user" ? e(m.content) : markdown(m.content)}</div><div class="message-actions">${button("copy-message", `${icon("copy")} 复制`, "", "btn btn-quiet", `data-id="${m.id}"`)}${m.role === "assistant" ? button("regenerate", `${icon("refresh")} 重新生成`, "", "btn btn-quiet", `data-id="${m.id}"`) : ""}</div></div></article>`,
           )
           .join("")
-      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div><h2>让每个想法，都有回响。</h2><p>写下一个问题，或选一个方向开始。<br>当前为演示模式，不会调用模型。</p><div class="suggestions">${STARTERS.filter(
+      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div><h2>让每个想法，都有回响。</h2><p>写下一个问题，或选一个方向开始。<br><span data-model-summary>${e(modelConfig.ready ? "已连接 " + modelConfig.provider + " · " + modelConfig.model : modelConfig.message)}</span></p><div class="suggestions">${STARTERS.filter(
           (s) => s.id !== "translate",
         )
           .map((s) =>
@@ -366,7 +432,7 @@ function chatPage() {
             ),
           )
           .join("")}</div></div>`
-  }</div><div class="chat-composer">${composer()}<div class="privacy-line">${icon("shield")}本地保存 · 演示消息不是真实 AI 回答</div></div></section></div>`;
+  }${chatRequestNotice(session)}</div><div class="chat-composer">${composer()}<div class="privacy-line">${icon("shield")}${e(modelPrivacy())}</div></div></section></div>`;
 }
 function settingsPage() {
   return (
@@ -387,7 +453,7 @@ function settingsPage() {
       )
       .join(
         "",
-      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>首版仅切换演示标签，不调用模型</small></div><select class="input" data-setting="model" aria-label="默认演示助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>接入模型后，才能获得真实的 AI 回答。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill">尚未连接</span></div>${notice("此版本不收集 API 密钥，也不向外部服务发送对话。实际接入需要在服务端配置密钥与鉴权。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
+      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(modelConfig.ready ? modelConfig.model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
   );
 }
 function serverSettings() {
@@ -409,7 +475,7 @@ function render() {
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>本地演示版</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge">模型演示</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>真实模型服务</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(modelConfig.ready ? modelConfig.model : "模型未就绪")}</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
   // The menu button needs one class attribute to remain available on small screens.
   document.querySelector("[data-menu-button]").classList.add("mobile-menu");
   document.querySelector("#sidebar").inert = mobile.matches;
@@ -588,6 +654,7 @@ function setMenu(open) {
 
 async function handleAction(target) {
   const { action, id } = target.dataset;
+  if (chatPending && ['delete-session', 'reset', 'import-backup'].includes(action)) throw new Error('模型正在回复，请等待完成后再修改会话记录。');
   const session = state.sessions.find((s) => s.id === route().id);
   switch (action) {
     case "menu":
@@ -705,7 +772,7 @@ async function handleAction(target) {
     case "delete-session":
       confirmDialog(
         "删除这段对话？",
-        "会话及其关联的演示任务记录将一起从当前浏览器删除。",
+        "会话及其关联的任务记录将一起删除。",
         "删除会话",
         () => {
           mutate((next) => removeSession(next, id));
@@ -725,16 +792,30 @@ async function handleAction(target) {
       if (m) await copy(m.content);
       break;
     }
-    case "regenerate":
-      mutate((next) => {
-        const m = next.sessions
-          .find((s) => s.id === session?.id)
-          ?.messages.find((m) => m.id === id && m.role === "assistant");
-        if (m) m.content = demoReply();
+    case "regenerate": {
+      if (chatPending || !session) throw new Error('请等待当前回复完成。');
+      const index = session.messages.findIndex(message => message.id === id && message.role === 'assistant');
+      const user = session.messages.slice(0, index).findLast(message => message.role === 'user');
+      if (!user) break;
+      const taskId = mutate(next => {
+        if (next.tasks.length >= 1000) throw new Error('任务记录已达上限，请先清理历史。');
+        const task = { id: uid('task'), requestId: uid('request'), assistant: next.settings.model, userMessageId: user.id, replaceMessageId: id, sessionId: session.id,
+          title: user.content.slice(0, 60), type: '重新生成', status: 'pending', createdAt: new Date().toISOString() };
+        next.tasks.unshift(task); return task.id;
       });
-      render();
-      toast("已重新显示演示消息，未调用模型");
-      break;
+      await performChat(taskId); break;
+    }
+    case "retry-chat":
+    case "resume-chat": {
+      if (chatPending) throw new Error('请等待当前回复完成。');
+      mutate(next => {
+        const task = next.tasks.find(item => item.id === id);
+        if (!task) throw new Error('请求记录不存在。');
+        if (action === 'retry-chat') task.requestId = uid('request');
+        task.status = 'pending'; delete task.error;
+      });
+      await performChat(id); break;
+    }
     case "upload":
       document.querySelector("#file-input")?.click();
       break;
@@ -852,13 +933,13 @@ async function handleAction(target) {
     case "connection-help":
       openDialog(
         "关于模型接入",
-        `<div class="dialog-body"><p>当前已提供工作空间数据后端、登录和自动同步；模型对话仍使用明确标注的演示消息。</p><ol class="help-list"><li>实际接入时，需要先选择模型服务与部署环境。</li><li>API 密钥应保存在服务端环境变量中，不写入页面、浏览器存储或公开仓库。</li><li>接入前需补齐身份验证、请求限流、超时和错误处理。</li></ol><p>演示助手的切换只用于体验界面，所有演示消息都有明确标记。</p></div>`,
+        `<div class="dialog-body"><p>工作台通过本机服务端调用真实模型，模型和密钥在服务端统一设置。</p><ol class="help-list"><li>在智作台服务端的“API 接口设置”中保存接口地址、密钥和模型 ID。</li><li>密钥由 Windows 加密保护，工作台只读取模型名称和就绪状态。</li><li>修改配置后，工作台自动同步；下次发送立即使用服务端当前配置。</li></ol><p>通用、写作和编程助手分别使用不同的提示风格。历史演示消息继续保留标记。</p></div>`,
       );
       break;
     case "help":
       openDialog(
         "欢迎使用智作台",
-        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后会保存会话和任务，并显示一条明确标注的演示消息。</li><li>支持多轮会话、复制和导出。当前没有调用任何 AI 服务。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("内容仅保存在当前浏览器，不支持跨设备同步。建议定期在设置中导出备份。")}</div>`,
+        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
       );
       break;
   }
@@ -883,19 +964,7 @@ document.addEventListener("submit", (event) => {
   const data = new FormData(form);
   try {
     if (form.id === "message-form") {
-      const content = String(data.get("message"));
-      const id = mutate((next) =>
-        recordExchange(
-          next,
-          route().page === "chat" ? route().id : "",
-          content,
-          pendingType,
-        ),
-      );
-      drafts.delete(form.dataset.draft);
-      form.querySelector("textarea").value = "";
-      pendingType = "AI 对话";
-      go("chat", id);
+      sendChat(String(data.get('message')), form.dataset.draft).catch(error => toast(error.message, true));
     } else if (form.id === "prompt-form") {
       const title = String(data.get("title")).trim(),
         content = String(data.get("content")).trim();
@@ -967,7 +1036,7 @@ document.addEventListener("change", async (event) => {
       mutate((next) => {
         next.settings.model = target.value;
       });
-      toast("已切换演示助手，未连接模型");
+      toast("已切换助手风格，模型继续跟随服务端设置");
     }
     if (target.id === "file-input" && target.files.length) {
       const files = [...target.files];
@@ -1099,8 +1168,9 @@ sync = new WorkspaceSync({
     render();
   },
   onNotice: toast,
-  canApply: () => !dialog.open && !document.activeElement?.matches("input, textarea, select"),
-  canReload: () => !dialog.open && ![...drafts.values()].some(value => value.trim()) && !document.activeElement?.matches("input, textarea, select"),
+  onStatus() { refreshModelConfig(); },
+  canApply: () => !chatPending && !dialog.open && !document.activeElement?.matches("input, textarea, select"),
+  canReload: () => !chatPending && !dialog.open && ![...drafts.values()].some(value => value.trim()) && !document.activeElement?.matches("input, textarea, select"),
   onVersion(version) {
     newServerVersion = version;
     const banner = document.querySelector("#sync-version");
