@@ -58,7 +58,14 @@ def internal(home, config, drain=False):
 
 def stop(child):
     if child and child.poll() is None:
-        child.terminate()
+        # Windows terminate() skips Node shutdown handlers. Stop this owned tree
+        # so its optional cloudflared visitor process cannot survive an update.
+        if os.name == 'nt':
+            subprocess.run(['taskkill.exe', '/PID', str(child.pid), '/T', '/F'],
+                           stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                           creationflags=subprocess.CREATE_NO_WINDOW)
+        else:
+            child.terminate()
         try:
             child.wait(timeout=8)
         except subprocess.TimeoutExpired:

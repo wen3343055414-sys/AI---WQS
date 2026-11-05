@@ -10,28 +10,32 @@ import { SystemManager, ACTIONS } from './system.js';
 import { WindowsKeyVault } from './model-settings.js';
 import { ModelRegistry } from './model-registry.js';
 import { ModelGateway, bridgeToken } from './model-gateway.js';
+import { WebsiteStore, createWebsiteServer } from './websites.js';
+import { WebsiteTunnel } from './website-tunnel.js';
+import { generateWebsite } from './website-generator.js';
 
 const CODE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ROOT = process.env.AI_WQS_ADMIN_HOME ? path.resolve(process.env.AI_WQS_ADMIN_HOME) : CODE_ROOT;
 const COOKIE = 'ai_wqs_admin_session';
-const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/api-settings.js', ['api-settings.js', 'text/javascript; charset=utf-8']], ['/models.css', ['models.css', 'text/css; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
+const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/api-settings.js', ['api-settings.js', 'text/javascript; charset=utf-8']], ['/websites.js', ['websites.js', 'text/javascript; charset=utf-8']], ['/websites.css', ['websites.css', 'text/css; charset=utf-8']], ['/models.css', ['models.css', 'text/css; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
 function tokenFrom(request) {
   return request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1) || '';
 }
 async function body(request, limit = 8192) {
   if (request.headers['content-type']?.split(';')[0].trim() !== 'application/json') throw new HttpError(415, '请使用 JSON 请求。');
-  let text = '';
+  const chunks = []; let size = 0;
   for await (const chunk of request) {
-    text += chunk;
-    if (Buffer.byteLength(text) > limit) throw new HttpError(413, '请求内容过大。');
+    size += chunk.length;
+    if (size > limit) throw new HttpError(413, '请求内容过大。');
+    chunks.push(chunk);
   }
-  try { const value = JSON.parse(text); if (!value || Array.isArray(value) || typeof value !== 'object') throw Error(); return value; }
+  try { const value = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(Buffer.concat(chunks))); if (!value || Array.isArray(value) || typeof value !== 'object') throw Error(); return value; }
   catch { throw new HttpError(400, '请求格式不正确。'); }
 }
 function sameToken(left, right) {
   return typeof right === 'string' && /^[a-f0-9]{48}$/.test(right) && left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 }
-export function createAdminServer({ root = ROOT, settings, store = new AdminStore(path.join(root, 'data')), manager = new SystemManager(root, settings), modelSettings = new ModelRegistry(store, new WindowsKeyVault(root, settings)), modelGateway = new ModelGateway(store, modelSettings, settings.bridgeToken || '') }) {
+export function createAdminServer({ root = ROOT, settings, store = new AdminStore(path.join(root, 'data')), manager = new SystemManager(root, settings), modelSettings = new ModelRegistry(store, new WindowsKeyVault(root, settings)), modelGateway = new ModelGateway(store, modelSettings, settings.bridgeToken || ''), websites = new WebsiteStore(store), websiteRuntime }) {
   let addressPort = settings.port;
   let draining = false;
   const attempts = new Map();
@@ -41,7 +45,8 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
     response.setHeader('X-Content-Type-Options', 'nosniff');
     response.setHeader('Referrer-Policy', 'no-referrer');
     response.setHeader('X-Frame-Options', 'DENY');
-    response.setHeader('Content-Security-Policy', "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'");
+    const websiteOrigin = websiteRuntime?.localOrigin || 'http://127.0.0.1:3200';
+    response.setHeader('Content-Security-Policy', `default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-src ${websiteOrigin}; frame-ancestors 'none'; base-uri 'none'; object-src 'none'; form-action 'self'`);
     const send = (status, value) => {
       response.writeHead(status, { 'Content-Type': 'application/json; charset=utf-8' });
       response.end(JSON.stringify(value));
@@ -70,7 +75,7 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
         }
         throw new HttpError(404, '接口不存在。');
       }
-      if (pathname === '/api/health' && request.method === 'GET') return send(200, { status: 'ok', mode: 'admin', version: '1.3.0', revision: settings.revision || 'local', draining });
+      if (pathname === '/api/health' && request.method === 'GET') return send(200, { status: 'ok', mode: 'admin', version: '1.4.0', revision: settings.revision || 'local', draining });
       const token = tokenFrom(request);
       const session = store.session(token);
       if (pathname === '/api/session' && request.method === 'GET') return send(200, { setupRequired: !store.hasOwner(), authenticated: Boolean(session), csrf: session?.csrf, product: '智作台服务端', port: addressPort });
@@ -112,6 +117,55 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
         }
         if (pathname === '/api/overview' && request.method === 'GET') return send(200, { ...(await manager.overview()), jobs: store.jobs(), audit: store.audits(), modelUsage: modelGateway.usage() });
         if (pathname === '/api/model-usage' && request.method === 'GET') return send(200, modelGateway.usage());
+        if (pathname === '/api/websites' && request.method === 'GET') return send(200, { sites: websites.list(), hosting: websiteRuntime?.status() || { localOrigin: null, available: false, tunnel: { state: 'stopped', url: null, installed: false, message: '网站访客服务未启动。' } }, models: modelGateway.config() });
+        if (pathname === '/api/websites' && request.method === 'POST') return send(201, websites.create(await body(request, 8_000_000)));
+        if (pathname === '/api/website-hosting/start' && request.method === 'POST') {
+          if (!websiteRuntime?.available) throw new HttpError(503, '网站访客服务不可用，请查看管理服务日志。');
+          await body(request);
+          const result = await websiteRuntime.tunnel.start();
+          store.audit('website_tunnel_start', 'started', '开启网站公网访问通道');
+          return send(202, result);
+        }
+        if (pathname === '/api/website-hosting/stop' && request.method === 'POST') {
+          const input = await body(request);
+          if (input.confirmation !== 'stop') throw new HttpError(400, '请确认关闭公网访问通道。');
+          if (!websiteRuntime) throw new HttpError(503, '网站访客服务未启动。');
+          const result = await websiteRuntime.tunnel.stop();
+          store.audit('website_tunnel_stop', 'success', '关闭网站公网访问通道');
+          return send(200, result);
+        }
+        const websiteRoute = pathname.match(/^\/api\/websites\/(site_[a-f0-9]+)(?:\/(publish|unpublish|delete|preview|generate|export))?$/);
+        if (websiteRoute) {
+          const [, id, action] = websiteRoute;
+          if (!action && request.method === 'GET') return send(200, websites.get(id));
+          if (action === 'export' && request.method === 'GET') {
+            const site = websites.get(id);
+            response.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8', 'Content-Disposition': `attachment; filename="${site.slug}.json"` });
+            return response.end(JSON.stringify({ schemaVersion: 1, name: site.name, slug: site.slug, description: site.description, files: site.files }, null, 2));
+          }
+          if (request.method === 'POST') {
+            const input = await body(request, action === 'generate' ? 120_000 : 8_000_000);
+            if (!action) return send(200, websites.save(id, input));
+            if (action === 'publish') {
+              if (!websiteRuntime?.available) throw new HttpError(503, '网站访客服务不可用，未发布。');
+              return send(200, websites.publish(id, input));
+            }
+            if (action === 'unpublish') return send(200, websites.unpublish(id, input));
+            if (action === 'delete') { websites.remove(id, input); return send(200, { ok: true }); }
+            if (action === 'preview') {
+              if (!websiteRuntime?.available) throw new HttpError(503, '网站访客服务不可用，无法预览。');
+              const preview = websites.preview(id, input);
+              return send(200, { ...preview, url: websiteRuntime.localOrigin + preview.path });
+            }
+            if (action === 'generate') {
+              const current = websites.get(id);
+              const generated = await generateWebsite(modelGateway, current, input);
+              if (draining) throw new HttpError(503, '管理服务正在更新，生成结果尚未保存。');
+              return send(200, { site: websites.save(id, { ...current, files: generated.files, revision: input.revision }), model: generated.model });
+            }
+          }
+          throw new HttpError(405, '不支持此网站操作。');
+        }
         if (pathname === '/api/model-settings' && request.method === 'GET') return send(200, modelSettings.read());
         if (pathname === '/api/model-settings' && request.method === 'POST') return send(200, await modelSettings.save(await body(request)));
         if (pathname === '/api/model-settings/test' && request.method === 'POST') return send(200, await modelSettings.test((await body(request)).revision));
@@ -170,7 +224,7 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
   server.on('listening', () => { addressPort = server.address().port; });
   server.requestTimeout = 30000;
   server.headersTimeout = 10000;
-  return { server, store };
+  return { server, store, websites };
 }
 
 async function main() {
@@ -178,12 +232,40 @@ async function main() {
   const settings = JSON.parse((await readFile(path.join(ROOT, 'config.json'), 'utf8')).replace(/^\uFEFF/, ''));
   if (!Number.isInteger(settings.port) || settings.port < 1024 || settings.port > 65535) throw new Error('管理端口配置无效。');
   await mkdir(path.join(ROOT, 'data'), { recursive: true, mode: 0o700 });
-  const { server, store } = createAdminServer({ settings: { ...settings, codeRoot: CODE_ROOT, revision: process.env.APP_VERSION || 'local', bridgeToken: await bridgeToken(ROOT) } });
-  server.listen(settings.port, '127.0.0.1', () => console.log(`${new Date().toISOString()} 管理服务已启动：http://127.0.0.1:${settings.port}`));
-  server.on('error', error => { console.error(error.message); process.exitCode = 1; });
-  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => {
-    server.close(() => { store.close(); process.exit(0); });
-    setTimeout(() => process.exit(1), 5000).unref();
+  const websitePort = settings.websitePort ?? 3200;
+  if (!Number.isInteger(websitePort) || websitePort < 1024 || websitePort > 65535 || websitePort === settings.port) throw new Error('网站访客端口配置无效。');
+  const store = new AdminStore(path.join(ROOT, 'data'));
+  const websites = new WebsiteStore(store);
+  const tunnel = new WebsiteTunnel({ root: ROOT, port: websitePort, executable: settings.websiteTunnelExecutable });
+  let publicOrigin = null;
+  if (settings.websitePublicOrigin) {
+    const configured = new URL(settings.websitePublicOrigin);
+    if (configured.protocol !== 'https:' || configured.username || configured.password || configured.pathname !== '/' || configured.search || configured.hash) throw new Error('网站公网地址必须为不含路径的 HTTPS 域名。');
+    publicOrigin = configured.origin;
+  }
+  const websiteRuntime = { available: false, localOrigin: `http://127.0.0.1:${websitePort}`, tunnel,
+    status() { return { available: this.available, localOrigin: this.localOrigin, publicOrigin, tunnel: tunnel.status() }; } };
+  const visitor = createWebsiteServer({ websites, allowedHost: hostname => {
+    const quickOrigin = tunnel.status().url;
+    return ['127.0.0.1', 'localhost'].includes(hostname) || [publicOrigin, quickOrigin].some(origin => origin && new URL(origin).hostname === hostname);
+  } });
+  visitor.on('error', error => { websiteRuntime.available = false; console.error('网站访客服务启动失败：', error.message); });
+  visitor.listen(websitePort, '127.0.0.1', () => {
+    websiteRuntime.available = true;
+    console.log(`${new Date().toISOString()} 网站访客服务已启动：${websiteRuntime.localOrigin}`);
+    tunnel.restore().catch(error => console.error('公网通道未恢复：', error.message));
   });
+  const { server } = createAdminServer({ store, websites, websiteRuntime, settings: { ...settings, codeRoot: CODE_ROOT, revision: process.env.APP_VERSION || 'local', bridgeToken: await bridgeToken(ROOT) } });
+  server.listen(settings.port, '127.0.0.1', () => console.log(`${new Date().toISOString()} 管理服务已启动：http://127.0.0.1:${settings.port}`));
+  let stopping = false;
+  async function shutdown(code = 0) {
+    if (stopping) return; stopping = true;
+    const timeout = setTimeout(() => process.exit(1), 7000); timeout.unref();
+    await tunnel.shutdown();
+    await Promise.all([server, visitor].map(listener => new Promise(resolve => { listener.close(resolve); listener.closeIdleConnections(); })));
+    store.close(); process.exit(code);
+  }
+  server.on('error', error => { console.error(error.message); shutdown(1).catch(() => process.exit(1)); });
+  for (const signal of ['SIGINT', 'SIGTERM']) process.on(signal, () => { shutdown().catch(() => process.exit(1)); });
 }
 if (process.argv[1] && pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url) main().catch(error => { console.error(error.message); process.exitCode = 1; });

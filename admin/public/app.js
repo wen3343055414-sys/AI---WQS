@@ -1,4 +1,5 @@
 import { initApiSettings } from './api-settings.js';
+import { initWebsites } from './websites.js';
 const $ = id => document.getElementById(id);
 const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const number = value => new Intl.NumberFormat('zh-CN').format(value || 0);
@@ -11,6 +12,7 @@ const pages = {
   deployment: ['版本与更新', 'RELEASE MANAGEMENT', '每一次更新，都有检查和退路。'],
   audit: ['操作记录', 'ACTIVITY HISTORY', '管理操作有记录，运行过程可追溯。'],
   'api-settings': ['API 接口设置', 'MODEL API SETTINGS', '统一连接国内、海外与本机模型，让每次对话都有合适的选择。'],
+  websites: ['网站管理', 'WEBSITE PUBLISHING', '从一个想法到可访问的网址，在这里编辑并发布你的网站。'],
 };
 const actions = {
   start: ['启动工作台', '启动前后端容器，并检查服务是否正常。'],
@@ -93,9 +95,10 @@ $('auth-form').addEventListener('submit', async event => {
   } catch (error) { $('auth-error').textContent = error.message; }
   finally { $('auth-submit').disabled = false; }
 });
-$('logout').addEventListener('click', async () => { try { await api('/api/logout', { method: 'POST', body: '{}' }); authenticated = false; csrf = ''; showAuth(false); } catch (error) { toast(error.message); } });
+$('logout').addEventListener('click', async () => { if (currentPage === 'websites' && !websiteUI.canLeave()) return; try { await api('/api/logout', { method: 'POST', body: '{}' }); authenticated = false; csrf = ''; showAuth(false); } catch (error) { toast(error.message); } });
 function navigate(page) {
   if (!pages[page]) return;
+  if (currentPage === 'websites' && page !== currentPage && !websiteUI.canLeave()) return;
   currentPage = page;
   document.querySelectorAll('.page-panel').forEach(node => { node.hidden = node.id !== `page-${page}`; });
   document.querySelectorAll('.nav-item').forEach(node => { const selected = node.dataset.page === page; node.classList.toggle('active', selected); node.setAttribute('aria-current', selected ? 'page' : 'false'); });
@@ -105,6 +108,7 @@ function navigate(page) {
   document.title = `${title} · 智作台服务端`; history.replaceState(null, '', `#${page}`);
   if (page === 'logs' && authenticated) loadLogs();
   if (page === 'api-settings' && authenticated) modelUI.load();
+  if (page === 'websites' && authenticated) websiteUI.load();
 }
 document.addEventListener('click', event => {
   const navigation = event.target.closest('[data-page]');
@@ -218,7 +222,7 @@ async function refresh() {
   catch (error) { $('connection-error').hidden = false; $('connection-error').textContent = error.message; }
   finally { refreshPending = false; $('refresh').classList.remove('spinning'); }
 }
-$('refresh').addEventListener('click', refresh);
+$('refresh').addEventListener('click', () => { refresh(); if (currentPage === 'websites') websiteUI.load(); });
 async function loadLogs() {
   if (!authenticated || logPending) return;
   logPending = true; $('log-refresh').disabled = true;
@@ -259,7 +263,8 @@ function showJob(id) {
 $('job-close').addEventListener('click', () => $('job-dialog').close());
 
 const modelUI = initApiSettings({ api, toast, escape, icon, date, number });
-setInterval(() => { if (!document.hidden) { refresh(); if (currentPage === 'logs' && $('log-follow').checked) loadLogs(); } }, 8000);
+const websiteUI = initWebsites({ api, toast, escape, icon, date });
+setInterval(() => { if (!document.hidden) { refresh(); if (currentPage === 'logs' && $('log-follow').checked) loadLogs(); if (currentPage === 'websites' && authenticated) websiteUI.refreshHosting(); } }, 8000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 try {
   const session = await api('/api/session'); csrf = session.csrf || ''; $('node-address').textContent = `127.0.0.1:${session.port}`;

@@ -11,6 +11,7 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest import mock
 import urllib.request
 
 spec = importlib.util.spec_from_file_location('admin_launcher', Path(__file__).parents[1] / 'admin/scripts/launcher.py')
@@ -22,6 +23,17 @@ SOURCE = Path(__file__).parents[1] / 'admin'
 
 
 class LauncherTests(unittest.TestCase):
+    def test_windows_stop_targets_only_the_owned_process_tree(self):
+        child = mock.Mock(pid=456)
+        child.poll.return_value = None
+        with mock.patch.object(module.os, 'name', 'nt'), mock.patch.object(module.subprocess, 'run') as run, \
+                mock.patch.object(module.subprocess, 'CREATE_NO_WINDOW', 0x08000000, create=True):
+            module.stop(child)
+        self.assertEqual(run.call_args.args[0], ['taskkill.exe', '/PID', '456', '/T', '/F'])
+        self.assertEqual(run.call_args.kwargs['creationflags'], 0x08000000)
+        child.terminate.assert_not_called()
+        child.wait.assert_called_once_with(timeout=8)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
         self.root = Path(self.temp.name).resolve()
