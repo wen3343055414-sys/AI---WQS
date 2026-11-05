@@ -34,6 +34,22 @@ test('regenerate replaces the selected answer only after success', () => {
   assert.ok(validateState(state)); assert.equal(state.sessions[0].id, sessionId);
 });
 
+test('chosen model persists with its request and invalid selections cannot partially mutate a chat', () => {
+  const state = createInitialState();
+  state.settings.modelKey = 'model_fixture_alpha';
+  beginChat(state, '', 'chosen model question', 'AI 对话', state.settings.modelKey);
+  state.settings.modelKey = 'model_fixture_beta';
+  const restored = JSON.parse(JSON.stringify(state));
+  assert.equal(restored.tasks[0].modelKey, 'model_fixture_alpha');
+  assert.equal(restored.settings.modelKey, 'model_fixture_beta');
+  assert.ok(validateState(restored));
+  const before = structuredClone(state);
+  assert.throws(() => beginChat(state, state.sessions[0].id, 'invalid model question', 'AI 对话', 'arbitrary-key'), /模型标识/);
+  assert.deepEqual(state, before);
+  restored.settings.modelKey = 'arbitrary-key';
+  assert.equal(validateState(restored), false);
+});
+
 test('model client authenticates, deduplicates and persists cached replies across restart', async t => {
   const directory = await mkdtemp(path.join(tmpdir(), 'model-client-test-'));
   const tokenFile = path.join(directory, 'token'); const token = 'b'.repeat(64); await writeFile(tokenFile, token);

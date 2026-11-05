@@ -1,5 +1,7 @@
+import { initApiSettings } from './api-settings.js';
 const $ = id => document.getElementById(id);
 const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
+const number = value => new Intl.NumberFormat('zh-CN').format(value || 0);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const pages = {
   overview: ['服务器总览', 'SERVER OVERVIEW', '从这里，了解本机服务的每一刻。'],
@@ -8,7 +10,7 @@ const pages = {
   backups: ['数据备份', 'DATABASE BACKUPS', '为重要的数据，留一份安心。'],
   deployment: ['版本与更新', 'RELEASE MANAGEMENT', '每一次更新，都有检查和退路。'],
   audit: ['操作记录', 'ACTIVITY HISTORY', '管理操作有记录，运行过程可追溯。'],
-  'api-settings': ['API 接口设置', 'MODEL API SETTINGS', '连接你的模型服务，集中管理地址、密钥与模型。'],
+  'api-settings': ['API 接口设置', 'MODEL API SETTINGS', '统一连接国内、海外与本机模型，让每次对话都有合适的选择。'],
 };
 const actions = {
   start: ['启动工作台', '启动前后端容器，并检查服务是否正常。'],
@@ -102,7 +104,7 @@ function navigate(page) {
   $('page-eyebrow').textContent = eyebrow; $('page-description').textContent = description;
   document.title = `${title} · 智作台服务端`; history.replaceState(null, '', `#${page}`);
   if (page === 'logs' && authenticated) loadLogs();
-  if (page === 'api-settings' && authenticated && !modelConfig) loadModelSettings();
+  if (page === 'api-settings' && authenticated) modelUI.load();
 }
 document.addEventListener('click', event => {
   const navigation = event.target.closest('[data-page]');
@@ -147,6 +149,7 @@ function render() {
   const memory = (r.stats || []).reduce((sum, row) => sum + parseBytes(row.memory.split('/')[0]), 0);
   const memoryPercent = (r.stats || []).reduce((sum, row) => sum + (parseFloat(row.memoryPercent) || 0), 0);
   renderModelUsage(r.modelUsage);
+  modelUI.updateUsage(r.modelUsage);
   $('node-address').textContent = `127.0.0.1:${r.admin.port}`;
   $('open-workbench').href = r.appUrl;
   $('metric-status').textContent = !r.docker.available ? '未连接' : healthy ? '运行正常' : running ? '检查中' : '已停止';
@@ -175,7 +178,7 @@ function render() {
   if (/^[\w.-]+\/[\w.-]+$/.test(r.repository)) $('commit-link').href = `https://github.com/${r.repository}/commit/${r.deployment.sha}`;
   $('deployment-details').innerHTML = [['代码仓库', r.repository], ['跟随分支', r.branch], ['Docker 前后端版本', r.deployment.sha?.slice(0, 12) || '—'], ['独立服务端版本', r.admin.revision?.slice(0, 12) || '本机版本'], ['版本一致性', r.admin.revision === r.deployment.sha ? '前端、后端与管理服务使用同一提交' : '等待管理服务切换或核查'], ['部署项目', r.project], ['上次部署', date(r.deployment.updatedAt)], ['上一版本', r.deployment.previous?.slice(0, 12) || '暂无'], ['最近备份', date(r.deployment.lastBackup)]].map(([key, value]) => `<div><dt>${key}</dt><dd>${escape(value)}</dd></div>`).join('');
   $('recent-jobs').innerHTML = renderJobs(r.jobs); $('deployment-jobs').innerHTML = renderJobs(r.jobs);
-  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '测试模型接口' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
+  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录', api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型', api_provider_delete: '删除模型连接', api_model_delete: '移除模型' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
   const busy = actionPending || r.jobs.some(job => job.status === 'running');
   document.querySelectorAll('[data-action]').forEach(button => {
     const action = button.dataset.action;
@@ -194,7 +197,6 @@ function render() {
 }
 function renderModelUsage(usage) {
   if (!usage) return;
-  const number = value => new Intl.NumberFormat('zh-CN').format(value || 0);
   const { model, today, total } = usage;
   badge($('model-ready-badge'), model.ready ? '真实模型已配置' : '等待配置', model.ready ? 'success' : 'warning');
   $('model-active-description').textContent = model.ready ? `${model.provider} · ${model.model} · 保存配置后自动同步到工作台` : model.message;
@@ -256,78 +258,7 @@ function showJob(id) {
 }
 $('job-close').addEventListener('click', () => $('job-dialog').close());
 
-let modelConfig = null, modelDirty = false, modelBusy = false, modelLoading = false, modelReloadArmed = false;
-function updateModelControls() {
-  const none = $('api-auth-mode').value === 'none';
-  for (const id of ['api-name', 'api-base-url', 'api-auth-mode', 'api-model', 'api-timeout', 'api-clear-key']) $(id).disabled = modelBusy || modelLoading;
-  $('api-key').disabled = none || $('api-clear-key').checked || modelBusy || modelLoading;
-  $('api-clear-key-row').hidden = !modelConfig?.hasApiKey || none;
-  $('api-key-status').textContent = none ? '无需密钥' : modelConfig?.hasApiKey ? '已加密保存' : '尚未保存';
-  $('api-key').placeholder = modelConfig?.hasApiKey ? '留空保留原密钥；输入可替换' : '填写服务商提供的 API Key';
-  $('api-test').disabled = modelBusy || modelDirty || !modelConfig?.configured || (modelConfig.authMode === 'bearer' && !modelConfig.hasApiKey);
-  $('api-save').disabled = modelBusy || modelLoading;
-  $('api-reload').disabled = modelBusy || modelLoading;
-  $('api-save-state').textContent = modelBusy ? '正在处理…' : modelDirty ? '有未保存的修改' : modelConfig?.configured ? `已保存 · ${date(modelConfig.updatedAt, true)}` : '尚未保存接口';
-  $('api-save-state').classList.toggle('dirty', modelDirty);
-}
-function renderModelStatus() {
-  if (!modelConfig) return;
-  const test = modelConfig.lastTest;
-  const waitingForKey = modelConfig.authMode === 'bearer' && !modelConfig.hasApiKey;
-  const label = !modelConfig.configured ? '未配置' : waitingForKey ? '待填写密钥' : !test ? '等待检测' : test.state === 'success' ? '连接正常' : test.state === 'warning' ? '请检查模型' : '检测失败';
-  badge($('api-connection-badge'), label, test?.state === 'success' ? 'success' : test?.state === 'failed' ? 'failed' : test?.state === 'warning' ? 'warning' : 'neutral');
-  $('api-result-title').textContent = test ? test.ok ? '接口可以连接' : '暂时无法连接' : modelConfig.configured ? '配置已保存' : '添加你的模型接口';
-  $('api-result-message').textContent = test?.message || (waitingForKey && modelConfig.configured ? '接口信息已保存，填写密钥后即可测试连接。' : '保存配置后，检测网络、认证和可用模型。');
-  $('api-detail-configured').textContent = modelConfig.configured ? modelConfig.name : '未保存';
-  $('api-detail-key').textContent = modelConfig.authMode === 'none' ? '无需密钥' : modelConfig.hasApiKey ? '已加密保存' : '未保存';
-  $('api-detail-tested').textContent = date(test?.testedAt, true);
-  $('api-detail-latency').textContent = test ? `${test.latencyMs} ms` : '—';
-  $('api-detail-models').textContent = test?.ok ? `${test.models.length} 个` : '—';
-  $('api-test-url').textContent = modelConfig.baseUrl ? `${modelConfig.baseUrl}/models` : '保存地址后显示';
-  $('api-model-options').replaceChildren(...(test?.models || []).map(id => { const option = document.createElement('option'); option.value = id; return option; }));
-  updateModelControls();
-}
-function fillModelSettings(value) {
-  modelConfig = value;
-  for (const [id, key] of [['api-name', 'name'], ['api-base-url', 'baseUrl'], ['api-model', 'model'], ['api-timeout', 'timeoutSeconds'], ['api-auth-mode', 'authMode']]) $(id).value = value[key];
-  $('api-key').value = ''; $('api-clear-key').checked = false; modelDirty = false; modelReloadArmed = false;
-  renderModelStatus();
-}
-async function loadModelSettings() {
-  if (modelLoading) return;
-  modelLoading = true; $('api-form-error').textContent = ''; updateModelControls();
-  try { fillModelSettings(await api('/api/model-settings')); }
-  catch (error) { $('api-form-error').textContent = error.message; }
-  finally { modelLoading = false; updateModelControls(); }
-}
-$('api-settings-form').addEventListener('input', () => { modelDirty = true; modelReloadArmed = false; $('api-form-error').textContent = ''; updateModelControls(); });
-$('api-auth-mode').addEventListener('change', () => { modelDirty = true; if ($('api-auth-mode').value === 'none') { $('api-key').value = ''; $('api-clear-key').checked = false; } updateModelControls(); });
-$('api-clear-key').addEventListener('change', () => { modelDirty = true; if ($('api-clear-key').checked) $('api-key').value = ''; updateModelControls(); });
-$('api-settings-form').addEventListener('submit', async event => {
-  event.preventDefault(); if (modelBusy || !modelConfig) return;
-  const input = { name: $('api-name').value, baseUrl: $('api-base-url').value.trim(), model: $('api-model').value.trim(), authMode: $('api-auth-mode').value, timeoutSeconds: Number($('api-timeout').value), clearKey: $('api-clear-key').checked, revision: modelConfig.revision };
-  if ($('api-key').value && input.authMode === 'bearer' && !input.clearKey) input.apiKey = $('api-key').value;
-  modelBusy = true; $('api-form-error').textContent = ''; updateModelControls();
-  try { fillModelSettings(await api('/api/model-settings', { method: 'POST', body: JSON.stringify(input) })); toast('API 接口配置已保存。'); }
-  catch (error) { $('api-form-error').textContent = error.message; }
-  finally { delete input.apiKey; modelBusy = false; updateModelControls(); }
-});
-$('api-test').addEventListener('click', async () => {
-  if (modelBusy || modelDirty || !modelConfig) return;
-  modelBusy = true; $('api-form-error').textContent = ''; $('api-test').classList.add('spinning'); updateModelControls();
-  $('api-result-title').textContent = '正在测试连接'; $('api-result-message').textContent = '正在读取已保存接口的模型列表，请稍候…';
-  try { const result = await api('/api/model-settings/test', { method: 'POST', body: JSON.stringify({ revision: modelConfig.revision }) }); modelConfig.lastTest = result; renderModelStatus(); toast(result.message); }
-  catch (error) { $('api-form-error').textContent = error.message; renderModelStatus(); }
-  finally { modelBusy = false; $('api-test').classList.remove('spinning'); updateModelControls(); }
-});
-$('api-reload').addEventListener('click', () => {
-  if (modelDirty && !modelReloadArmed) {
-    $('api-form-error').textContent = '这会放弃未保存的修改；再次点击“重新加载配置”确认。';
-    modelReloadArmed = true; return;
-  }
-  loadModelSettings();
-});
-window.addEventListener('beforeunload', event => { if (modelDirty) { event.preventDefault(); event.returnValue = ''; } });
+const modelUI = initApiSettings({ api, toast, escape, icon, date, number });
 setInterval(() => { if (!document.hidden) { refresh(); if (currentPage === 'logs' && $('log-follow').checked) loadLogs(); } }, 8000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 try {

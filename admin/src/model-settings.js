@@ -6,9 +6,10 @@ import https from 'node:https';
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { HttpError } from './store.js';
+import { credentialHeaders, modelsUrl, parseModels } from './model-protocols.js';
 
 const DEFAULTS = { name: '自定义模型接口', baseUrl: '', model: '', authMode: 'bearer', timeoutSeconds: 30 };
-class ProbeError extends Error {}
+export class ProbeError extends Error { constructor(message, status = null) { super(message); this.status = status; } }
 function ipv4(address) {
   if (isIP(address) === 4) return address;
   if (!address.toLowerCase().startsWith('::ffff:')) return null;
@@ -39,10 +40,10 @@ export function normalizeBaseUrl(value) {
   if (isIP(host) && !allowedAddress(host, url.protocol)) throw new HttpError(400, '不支持该接口地址，请使用 HTTPS 服务或本机模型地址。');
   if (url.protocol === 'http:' && host !== 'localhost' && !loopback(host)) throw new HttpError(400, '远程接口请使用 HTTPS；本机模型可以使用 HTTP。');
   url.pathname = url.pathname.replace(/\/+$/, '');
-  if (/\/(models|chat\/completions|responses)$/i.test(url.pathname)) throw new HttpError(400, '请填写 Base URL，不要包含 /models、/chat/completions 等具体接口路径。');
+  if (/\/(models(?:\/.*)?|chat\/completions|responses|messages|[^/]*:generateContent)$/i.test(url.pathname)) throw new HttpError(400, '请填写 Base URL，不要包含 /models、/chat/completions 等具体接口路径。');
   return url.toString().replace(/\/$/, '');
 }
-function validate(input) {
+export function validateSettings(input) {
   if (typeof input.name !== 'string' || !input.name.trim() || input.name.length > 50) throw new HttpError(400, '接口名称需要 1–50 个字符。');
   if (!['bearer', 'none'].includes(input.authMode)) throw new HttpError(400, '认证方式无效。');
   if (typeof input.model !== 'string' || input.model.length > 200 || /[\x00-\x1f\x7f]/.test(input.model)) throw new HttpError(400, '模型名称格式不正确。');
@@ -85,7 +86,7 @@ export class WindowsKeyVault {
 }
 
 export async function probeModels(config, apiKey, { resolver = lookup } = {}) {
-  const url = new URL(`${config.baseUrl}/models`);
+  const url = modelsUrl(config);
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   let request, expired = false, timer;
   const timeout = new Promise((_, reject) => { timer = setTimeout(() => { expired = true; request?.destroy(); reject(new ProbeError('连接超时，请检查接口地址或增加超时时间。')); }, config.timeoutSeconds * 1000); });
@@ -94,17 +95,19 @@ export async function probeModels(config, apiKey, { resolver = lookup } = {}) {
     if (expired) throw new ProbeError('连接超时。');
     const destination = addresses.find(item => item.family === 4 && allowedAddress(item.address, url.protocol)) || addresses.find(item => allowedAddress(item.address, url.protocol));
     if (!destination) throw new ProbeError('接口解析到了不支持的网络地址，已停止连接。');
-    return new Promise((resolve, reject) => {
-      const headers = { Accept: 'application/json', 'User-Agent': 'ZhiZuoTai-Server/1.1' };
-      if (config.authMode === 'bearer') headers.Authorization = `Bearer ${apiKey}`;
-      request = (url.protocol === 'https:' ? https : http).request(url, {
+    const found = new Set(); let cursor = null;
+    for (let page = 0; page < 5; page++) {
+      if (expired) throw new ProbeError('连接超时。');
+      const result = await new Promise((resolve, reject) => {
+      const headers = { Accept: 'application/json', 'User-Agent': 'ZhiZuoTai-Server/2.0', ...credentialHeaders(config, apiKey) };
+      request = (url.protocol === 'https:' ? https : http).request(modelsUrl(config, cursor), {
         method: 'GET', headers, agent: false, family: destination.family,
         lookup: (_host, options, callback) => options.all ? callback(null, [destination]) : callback(null, destination.address, destination.family),
       }, response => {
         if (response.statusCode !== 200) {
           response.destroy();
           const messages = { 401: '认证失败，请检查 API 密钥是否有效。', 403: '接口拒绝访问，请检查密钥权限。', 404: '未找到 /models，请检查 Base URL 和接口协议。', 429: '接口请求受限，请稍后重试。' };
-          reject(new ProbeError(messages[response.statusCode] || (response.statusCode >= 300 && response.statusCode < 400 ? '接口返回了重定向，密钥未转发；请填写最终接口地址。' : `接口返回 HTTP ${response.statusCode}。`)));
+          reject(new ProbeError(messages[response.statusCode] || (response.statusCode >= 300 && response.statusCode < 400 ? '接口返回了重定向，密钥未转发；请填写最终接口地址。' : `接口返回 HTTP ${response.statusCode}。`), response.statusCode));
           return;
         }
         const chunks = []; let size = 0;
@@ -113,15 +116,18 @@ export async function probeModels(config, apiKey, { resolver = lookup } = {}) {
         response.on('end', () => {
           try {
             const data = JSON.parse(Buffer.concat(chunks).toString('utf8'));
-            if (!Array.isArray(data.data)) throw Error();
-            const models = [...new Set(data.data.map(item => item?.id).filter(id => typeof id === 'string' && id.length > 0 && id.length <= 200 && !/[\x00-\x1f\x7f]/.test(id) && !(apiKey && id.includes(apiKey))))].slice(0, 500);
-            resolve(models);
+            resolve(parseModels(config, data, apiKey));
           } catch { reject(new ProbeError('接口响应不是兼容的模型列表，请检查协议与 Base URL。')); }
         });
       });
       request.on('error', error => reject(error));
       request.end();
-    });
+      });
+      result.models.forEach(model => found.add(model));
+      if (!result.cursor || result.cursor === cursor || found.size >= 500) break;
+      cursor = result.cursor;
+    }
+    return [...found].slice(0, 500);
   })();
   try { return await Promise.race([operation, timeout]); }
   catch (error) {
@@ -146,7 +152,7 @@ export class ModelSettings {
     if (this.saving) throw new HttpError(409, '正在保存配置，请稍后重试。');
     this.saving = true;
     try {
-      const config = validate(input), old = this.row();
+      const config = validateSettings(input), old = this.row();
       if (input.revision !== (old?.revision || 0)) throw new HttpError(409, '配置已在其他页面更新，请重新加载后再保存。');
       let cipher = old?.key_cipher || null;
       if (old && cipher && config.authMode === 'bearer' && !input.apiKey && !input.clearKey && new URL(JSON.parse(old.config).baseUrl).origin !== new URL(config.baseUrl).origin)

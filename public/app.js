@@ -141,8 +141,23 @@ function persist(next) {
   }
   state = next;
 }
+function activeModel() {
+  const key = state.settings.modelKey;
+  if (!key) return modelConfig;
+  const model = (modelConfig.models || []).find(item => item.key === key);
+  return model ? { ...model, model: model.id, ready: true, message: '已选择服务端提供的模型。' }
+    : { ready: false, provider: '', model: '', message: '所选模型已停用或不再可用，请重新选择模型。' };
+}
+function aiModelOptions() {
+  const key = state.settings.modelKey || '', models = modelConfig.models || [];
+  const groups = new Map();
+  for (const model of models) { if (!groups.has(model.providerId)) groups.set(model.providerId, { provider: model.provider, models: [] }); groups.get(model.providerId).models.push(model); }
+  return `<option value="" ${!key ? 'selected' : ''}>跟随服务端默认${modelConfig.model ? ` · ${e(modelConfig.model)}` : ''}</option>` +
+    (key && !models.some(model => model.key === key) ? `<option value="${e(key)}" selected disabled>所选模型已停用</option>` : '') +
+    [...groups.values()].map(group => `<optgroup label="${e(group.provider)}">${group.models.map(model => `<option value="${e(model.key)}" ${key === model.key ? 'selected' : ''}>${e(model.name)}${model.name !== model.id ? ` · ${e(model.id)}` : ''}</option>`).join('')}</optgroup>`).join('');
+}
 function modelPrivacy() {
-  return modelConfig.ready ? `已连接 ${modelConfig.provider} · 对话和所选文本将发送给模型服务，密钥由服务端保管` : modelConfig.message;
+  return activeModel().ready ? `已连接 ${activeModel().provider} · 对话和所选文本将发送给模型服务，密钥由服务端保管` : activeModel().message;
 }
 async function refreshModelConfig(force = false) {
   if (!sync?.authenticated || modelConfigPending || (!force && Date.now() - modelConfigChecked < 5000)) return;
@@ -152,10 +167,12 @@ async function refreshModelConfig(force = false) {
     const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
     modelConfig = value;
     if (changed && !chatPending && !dialog.open && !document.activeElement?.matches('input,textarea,select')) render();
-    document.querySelectorAll('[data-model-label]').forEach(element => { element.textContent = value.ready ? value.model : '模型未就绪'; });
-    document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = value.ready ? `已连接 ${value.provider} · ${value.model}` : value.message; });
+    const current = activeModel();
+    document.querySelectorAll('[data-model-label]').forEach(element => { element.textContent = current.ready ? current.model : '模型未就绪'; });
+    document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = current.ready ? `已连接 ${current.provider} · ${current.model}` : current.message; });
+    if (changed && !chatPending) document.querySelectorAll('[data-setting="modelKey"]').forEach(select => { if (document.activeElement !== select) select.innerHTML = aiModelOptions(); });
     const send = document.querySelector('#message-form button[type=submit]');
-    if (send) send.disabled = Boolean(chatPending || !value.ready);
+    if (send) send.disabled = Boolean(chatPending || !current.ready);
   } catch { modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
   finally { modelConfigChecked = Date.now(); modelConfigPending = false; }
 }
@@ -170,8 +187,8 @@ async function sendChat(content, draftKey) {
   if (chatPending) throw new Error('请等待当前回复完成。');
   await refreshModelConfig(true);
   if (chatPending) throw new Error('请等待当前回复完成。');
-  if (!modelConfig.ready || !sync?.authenticated) throw new Error(modelConfig.message || '请先登录并在服务端配置模型接口。');
-  const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType));
+  if (!activeModel().ready || !sync?.authenticated) throw new Error(activeModel().message || '请先登录并在服务端配置模型接口。');
+  const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType, next.settings.modelKey || ''));
   drafts.delete(draftKey);
   const input = document.querySelector('#message-input'); if (input) input.value = '';
   pendingType = 'AI 对话'; go('chat', result.sessionId);
@@ -185,7 +202,7 @@ async function performChat(taskId) {
   render();
   try {
     const session = state.sessions.find(item => item.id === task.sessionId);
-    const input = { requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId) };
+    const input = { requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}) };
     const until = Date.now() + 15000;
     while (sync.pending || sync.busy) {
       if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
@@ -268,7 +285,7 @@ function composer(home = false) {
   return `<form class="composer" id="message-form" data-draft="${e(key)}">
     ${home ? `<label class="composer-label" for="message-input">${icon("spark")}今天，想一起完成什么？</label>` : '<label class="visually-hidden" for="message-input">输入消息</label>'}
     <textarea id="message-input" name="message" maxlength="20000" required placeholder="${home ? "写下你的想法，或者从下方选择一个灵感起点…" : "输入你的问题，继续这段思考…"}">${e(drafts.get(key) || "")}</textarea>
-    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}<select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select><span class="composer-hint" data-model-label>${e(modelConfig.ready ? modelConfig.model : '等待服务端配置')}</span></div><button type="submit" class="btn btn-primary" ${chatPending || !modelConfig.ready ? 'disabled' : ''}>${chatPending ? '正在回复…' : home ? '开始对话' : '发送'}${icon("arrow")}</button></div>
+    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}<select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select><select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select></div><button type="submit" class="btn btn-primary" ${chatPending || !activeModel().ready ? 'disabled' : ''}>${chatPending ? '正在回复…' : home ? '开始对话' : '发送'}${icon("arrow")}</button></div>
   </form>`;
 }
 function promptCard(p) {
@@ -411,7 +428,7 @@ function chatPage() {
     )
     .join(
       "",
-    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(modelConfig.ready ? modelConfig.model : "模型未就绪")}</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
+    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
     session
       ? session.messages
           .map(
@@ -419,7 +436,7 @@ function chatPage() {
               `<article class="message ${m.role}"><div class="avatar">${m.role === "user" ? "我" : icon("spark")}</div><div class="message-body"><div class="message-label">${m.role === "user" ? "你" : `智作台 <span class="demo-badge">${m.demo ? "历史演示消息" : e(m.model)}</span>`}<time datetime="${e(m.createdAt)}">${dateText(m.createdAt, true)}</time></div><div class="message-content">${m.role === "user" ? e(m.content) : markdown(m.content)}</div><div class="message-actions">${button("copy-message", `${icon("copy")} 复制`, "", "btn btn-quiet", `data-id="${m.id}"`)}${m.role === "assistant" ? button("regenerate", `${icon("refresh")} 重新生成`, "", "btn btn-quiet", `data-id="${m.id}"`) : ""}</div></div></article>`,
           )
           .join("")
-      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div><h2>让每个想法，都有回响。</h2><p>写下一个问题，或选一个方向开始。<br><span data-model-summary>${e(modelConfig.ready ? "已连接 " + modelConfig.provider + " · " + modelConfig.model : modelConfig.message)}</span></p><div class="suggestions">${STARTERS.filter(
+      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div><h2>让每个想法，都有回响。</h2><p>写下一个问题，或选一个方向开始。<br><span data-model-summary>${e(activeModel().ready ? "已连接 " + activeModel().provider + " · " + activeModel().model : activeModel().message)}</span></p><div class="suggestions">${STARTERS.filter(
           (s) => s.id !== "translate",
         )
           .map((s) =>
@@ -453,7 +470,7 @@ function settingsPage() {
       )
       .join(
         "",
-      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(modelConfig.ready ? modelConfig.model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
+      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(activeModel().ready ? activeModel().model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
   );
 }
 function serverSettings() {
@@ -475,7 +492,7 @@ function render() {
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>真实模型服务</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(modelConfig.ready ? modelConfig.model : "模型未就绪")}</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>真实模型服务</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
   // The menu button needs one class attribute to remain available on small screens.
   document.querySelector("[data-menu-button]").classList.add("mobile-menu");
   document.querySelector("#sidebar").inert = mobile.matches;
@@ -799,7 +816,7 @@ async function handleAction(target) {
       if (!user) break;
       const taskId = mutate(next => {
         if (next.tasks.length >= 1000) throw new Error('任务记录已达上限，请先清理历史。');
-        const task = { id: uid('task'), requestId: uid('request'), assistant: next.settings.model, userMessageId: user.id, replaceMessageId: id, sessionId: session.id,
+        const task = { id: uid('task'), requestId: uid('request'), assistant: next.settings.model, ...(next.settings.modelKey ? { modelKey: next.settings.modelKey } : {}), userMessageId: user.id, replaceMessageId: id, sessionId: session.id,
           title: user.content.slice(0, 60), type: '重新生成', status: 'pending', createdAt: new Date().toISOString() };
         next.tasks.unshift(task); return task.id;
       });
@@ -811,7 +828,7 @@ async function handleAction(target) {
       mutate(next => {
         const task = next.tasks.find(item => item.id === id);
         if (!task) throw new Error('请求记录不存在。');
-        if (action === 'retry-chat') task.requestId = uid('request');
+        if (action === 'retry-chat') { task.requestId = uid('request'); if (next.settings.modelKey) task.modelKey = next.settings.modelKey; else delete task.modelKey; }
         task.status = 'pending'; delete task.error;
       });
       await performChat(id); break;
@@ -1029,6 +1046,11 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
+    if (target.dataset.setting === 'modelKey') {
+      if (target.value && !(modelConfig.models || []).some(model => model.key === target.value)) throw new Error('此模型不可用，请刷新后重新选择。');
+      mutate(next => { next.settings.modelKey = target.value; });
+      render(); toast(target.value ? '已切换模型，下一条消息将使用所选模型。' : '已恢复跟随服务端默认模型。');
+    }
     if (
       target.dataset.setting === "model" &&
       Object.hasOwn(MODELS, target.value)

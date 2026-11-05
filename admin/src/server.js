@@ -7,13 +7,14 @@ import path from 'node:path';
 import { timingSafeEqual } from 'node:crypto';
 import { AdminStore, HttpError } from './store.js';
 import { SystemManager, ACTIONS } from './system.js';
-import { ModelSettings, WindowsKeyVault } from './model-settings.js';
+import { WindowsKeyVault } from './model-settings.js';
+import { ModelRegistry } from './model-registry.js';
 import { ModelGateway, bridgeToken } from './model-gateway.js';
 
 const CODE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ROOT = process.env.AI_WQS_ADMIN_HOME ? path.resolve(process.env.AI_WQS_ADMIN_HOME) : CODE_ROOT;
 const COOKIE = 'ai_wqs_admin_session';
-const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
+const assets = new Map([['/', ['index.html', 'text/html; charset=utf-8']], ['/app.js', ['app.js', 'text/javascript; charset=utf-8']], ['/api-settings.js', ['api-settings.js', 'text/javascript; charset=utf-8']], ['/models.css', ['models.css', 'text/css; charset=utf-8']], ['/styles.css', ['styles.css', 'text/css; charset=utf-8']], ['/favicon.svg', ['favicon.svg', 'image/svg+xml']]]);
 function tokenFrom(request) {
   return request.headers.cookie?.split(';').map(value => value.trim()).find(value => value.startsWith(`${COOKIE}=`))?.slice(COOKIE.length + 1) || '';
 }
@@ -30,7 +31,7 @@ async function body(request, limit = 8192) {
 function sameToken(left, right) {
   return typeof right === 'string' && /^[a-f0-9]{48}$/.test(right) && left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 }
-export function createAdminServer({ root = ROOT, settings, store = new AdminStore(path.join(root, 'data')), manager = new SystemManager(root, settings), modelSettings = new ModelSettings(store, new WindowsKeyVault(root, settings)), modelGateway = new ModelGateway(store, modelSettings, settings.bridgeToken || '') }) {
+export function createAdminServer({ root = ROOT, settings, store = new AdminStore(path.join(root, 'data')), manager = new SystemManager(root, settings), modelSettings = new ModelRegistry(store, new WindowsKeyVault(root, settings)), modelGateway = new ModelGateway(store, modelSettings, settings.bridgeToken || '') }) {
   let addressPort = settings.port;
   let draining = false;
   const attempts = new Map();
@@ -69,7 +70,7 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
         }
         throw new HttpError(404, '接口不存在。');
       }
-      if (pathname === '/api/health' && request.method === 'GET') return send(200, { status: 'ok', mode: 'admin', version: '1.2.1', revision: settings.revision || 'local', draining });
+      if (pathname === '/api/health' && request.method === 'GET') return send(200, { status: 'ok', mode: 'admin', version: '1.3.0', revision: settings.revision || 'local', draining });
       const token = tokenFrom(request);
       const session = store.session(token);
       if (pathname === '/api/session' && request.method === 'GET') return send(200, { setupRequired: !store.hasOwner(), authenticated: Boolean(session), csrf: session?.csrf, product: '智作台服务端', port: addressPort });
@@ -114,6 +115,23 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
         if (pathname === '/api/model-settings' && request.method === 'GET') return send(200, modelSettings.read());
         if (pathname === '/api/model-settings' && request.method === 'POST') return send(200, await modelSettings.save(await body(request)));
         if (pathname === '/api/model-settings/test' && request.method === 'POST') return send(200, await modelSettings.test((await body(request)).revision));
+        if (pathname === '/api/model-providers' && request.method === 'GET') return send(200, modelSettings.list());
+        if (pathname === '/api/model-providers' && request.method === 'POST') return send(200, await modelSettings.saveProvider(null, await body(request)));
+        if (pathname === '/api/model-routing' && request.method === 'POST') { const input = await body(request); return send(200, modelSettings.setDefault(input.modelKey, input.revision)); }
+        const providerRoute = pathname.match(/^\/api\/model-providers\/(provider_[A-Za-z0-9_-]+)(?:\/(test|models|delete))?$/);
+        if (providerRoute && request.method === 'POST') {
+          const [, id, action] = providerRoute, input = await body(request);
+          if (action === 'test') return send(200, await modelSettings.testProvider(id, input.revision));
+          if (action === 'models') return send(200, modelSettings.addModel(id, input));
+          if (action === 'delete') { modelSettings.removeProvider(id, input.revision, input.confirmation); return send(200, { ok: true }); }
+          return send(200, await modelSettings.saveProvider(id, input));
+        }
+        const modelRoute = pathname.match(/^\/api\/model-catalog\/(model_[A-Za-z0-9_-]+)(?:\/(delete))?$/);
+        if (modelRoute && request.method === 'POST') {
+          const [, id, action] = modelRoute, input = await body(request);
+          if (action === 'delete') { modelSettings.removeModel(id, input.revision, input.confirmation); return send(200, { ok: true }); }
+          return send(200, modelSettings.updateModel(id, input));
+        }
         if (pathname === '/api/logs' && request.method === 'GET') {
           const lines = Number(url.searchParams.get('lines') || 140);
           if (!Number.isInteger(lines) || lines < 1 || lines > 500) throw new HttpError(400, '日志行数需为 1–500。');

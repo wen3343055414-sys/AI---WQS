@@ -4,6 +4,8 @@ import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 import { allowedAddress } from './model-settings.js';
 import { HttpError } from './store.js';
+import { chatRequest, credentialHeaders, parseReply } from './model-protocols.js';
+export { parseUsage } from './model-protocols.js';
 
 const errors = {
   400: '模型接口拒绝了请求，请检查模型 ID 和对话长度。',
@@ -17,25 +19,11 @@ const errors = {
 export class ProviderError extends HttpError {
   constructor(message, code = 'provider_error', usage = null) { super(502, message); this.code = code; this.usage = usage; }
 }
-export function parseUsage(value) {
-  const valid = n => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000_000;
-  if (!value || ![value.prompt_tokens, value.completion_tokens, value.total_tokens].every(valid) || value.total_tokens !== value.prompt_tokens + value.completion_tokens) return null;
-  const cached = value.prompt_cache_hit_tokens ?? value.prompt_tokens_details?.cached_tokens;
-  const reasoning = value.completion_tokens_details?.reasoning_tokens;
-  return { promptTokens: value.prompt_tokens, completionTokens: value.completion_tokens, totalTokens: value.total_tokens,
-    cachedTokens: valid(cached) && cached <= value.prompt_tokens ? cached : null,
-    reasoningTokens: valid(reasoning) && reasoning <= value.completion_tokens ? reasoning : null };
-}
-
 // No redirects, raw provider errors, or credentials in diagnostics. DNS is pinned
 // after validation, with the same address restrictions as the settings probe.
 export async function completeChat(config, apiKey, messages, { resolver = lookup, maxTokens = 4096 } = {}) {
-  const url = new URL(`${config.baseUrl}/chat/completions`);
+  const { url, input } = chatRequest(config, messages, maxTokens);
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
-  const input = { model: config.model, messages, stream: false, max_tokens: maxTokens };
-  // DeepSeek enables thinking by default. The workbench requests direct answers;
-  // never forward or persist reasoning_content from a provider response.
-  if (hostname === 'api.deepseek.com') input.thinking = { type: 'disabled' };
   const payload = JSON.stringify(input);
   let request, expired = false, timer;
   const deadline = new Promise((_, reject) => {
@@ -47,8 +35,7 @@ export async function completeChat(config, apiKey, messages, { resolver = lookup
     const destination = addresses.find(item => item.family === 4 && allowedAddress(item.address, url.protocol)) || addresses.find(item => allowedAddress(item.address, url.protocol));
     if (!destination) throw new ProviderError('模型接口解析到不支持的网络地址，已停止请求。', 'unsafe_address');
     return new Promise((resolve, reject) => {
-      const headers = { Accept: 'application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'User-Agent': 'ZhiZuoTai-Server/1.2' };
-      if (config.authMode === 'bearer') headers.Authorization = `Bearer ${apiKey}`;
+      const headers = { Accept: 'application/json', 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(payload), 'User-Agent': 'ZhiZuoTai-Server/2.0', ...credentialHeaders(config, apiKey) };
       request = (url.protocol === 'https:' ? https : http).request(url, {
         method: 'POST', headers, agent: false, family: destination.family,
         lookup: (_host, options, callback) => options.all ? callback(null, [destination]) : callback(null, destination.address, destination.family),
@@ -70,12 +57,12 @@ export async function completeChat(config, apiKey, messages, { resolver = lookup
           let data;
           try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
           catch { reject(new ProviderError('模型接口返回了无效的 JSON。', 'invalid_response')); return; }
-          const usage = parseUsage(data.usage), choice = data.choices?.[0], content = choice?.message?.content;
+          const { usage, content, finishReason } = parseReply(config, data);
           if (typeof content !== 'string' || !content.trim() || content.length > 50_000 || (apiKey && content.includes(apiKey))) {
             reject(new ProviderError('模型接口未返回可显示的回复，请检查模型配置后重试。', 'invalid_response', usage)); return;
           }
-          if (!['stop', 'length'].includes(choice.finish_reason)) { reject(new ProviderError('模型未正常完成回复，请稍后重试。', 'incomplete_response', usage)); return; }
-          resolve({ content, model: config.model, finishReason: choice.finish_reason, usage });
+          if (!['stop', 'length'].includes(finishReason)) { reject(new ProviderError('模型未正常完成回复，请稍后重试。', 'incomplete_response', usage)); return; }
+          resolve({ content, model: config.model, finishReason, usage });
         });
       });
       request.on('error', reject);

@@ -130,6 +130,7 @@ const isTime = (v) =>
   Number.isFinite(Date.parse(v)) &&
   new Date(v).toISOString() === v;
 const isId = (v) => typeof v === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(v);
+const isModelKey = (v) => typeof v === "string" && /^model_[A-Za-z0-9_-]{1,64}$/.test(v);
 const uniqueIds = (items) =>
   items.every((item) => item && typeof item === "object") &&
   new Set(items.map((item) => item.id)).size === items.length;
@@ -137,7 +138,8 @@ export function validateState(value) {
   if (!value || value.version !== 1 || !value.settings) return false;
   if (
     !["light", "dark", "system"].includes(value.settings.theme) ||
-    !Object.hasOwn(MODELS, value.settings.model)
+    !Object.hasOwn(MODELS, value.settings.model) ||
+    (value.settings.modelKey !== undefined && value.settings.modelKey !== '' && !isModelKey(value.settings.modelKey))
   )
     return false;
   if (
@@ -210,7 +212,8 @@ export function validateState(value) {
         isText(t.type, 30) &&
         ["demo", "pending", "success", "failed"].includes(t.status) &&
         isTime(t.createdAt) &&
-        isId(t.sessionId),
+        isId(t.sessionId) &&
+        (t.modelKey === undefined || isModelKey(t.modelKey)),
     )
   )
     return false;
@@ -334,10 +337,11 @@ export function removeSession(state, id) {
   state.sessions = state.sessions.filter((s) => s.id !== id);
   state.tasks = state.tasks.filter((t) => t.sessionId !== id);
 }
-export function beginChat(state, sessionId, content, type = 'AI 对话') {
+export function beginChat(state, sessionId, content, type = 'AI 对话', modelKey = '') {
   const text = content.trim(), now = new Date().toISOString();
   let session = state.sessions.find(item => item.id === sessionId);
   if (!text || text.length > 20_000) throw new Error('请输入 1–20,000 个字符。');
+  if (modelKey && !isModelKey(modelKey)) throw new Error('所选模型标识无效。');
   if (state.tasks.length >= 1000 || (!session && state.sessions.length >= 1000) || (session && session.messages.length > 1998)) throw new Error('记录数量已达上限，请先导出并删除部分历史。');
   if (!session) {
     session = { id: uid('session'), title: text.replace(/\s+/g, ' ').slice(0, 32), createdAt: now, updatedAt: now, messages: [] };
@@ -345,7 +349,7 @@ export function beginChat(state, sessionId, content, type = 'AI 对话') {
   }
   const message = { id: uid('message'), role: 'user', content: text, createdAt: now };
   session.messages.push(message); session.updatedAt = now;
-  const task = { id: uid('task'), requestId: uid('request'), assistant: state.settings.model, userMessageId: message.id, title: text.replace(/\s+/g, ' ').slice(0, 60), type, status: 'pending', createdAt: now, sessionId: session.id };
+  const task = { id: uid('task'), requestId: uid('request'), assistant: state.settings.model, ...(modelKey ? { modelKey } : {}), userMessageId: message.id, title: text.replace(/\s+/g, ' ').slice(0, 60), type, status: 'pending', createdAt: now, sessionId: session.id };
   state.tasks.unshift(task);
   return { sessionId: session.id, taskId: task.id };
 }
