@@ -56,6 +56,9 @@ async function fixture(t) {
 
 test('website administration requires independent login, matching origin and session CSRF', async t => {
   const f = await fixture(t);
+  const health = (await f.request('/api/health')).data;
+  assert.deepEqual(health.websites, { available: true, localOrigin: f.localOrigin, publicOrigin: null, state: 'stopped' });
+  assert.equal(health.sites, undefined); assert.equal(health.csrf, undefined);
   assert.equal((await f.request('/api/websites')).status, 401);
   assert.equal((await f.post('/api/websites', draft())).status, 401);
   assert.equal((await f.setup()).status, 200);

@@ -75,7 +75,12 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
         }
         throw new HttpError(404, '接口不存在。');
       }
-      if (pathname === '/api/health' && request.method === 'GET') return send(200, { status: 'ok', mode: 'admin', version: '1.4.0', revision: settings.revision || 'local', draining });
+      if (pathname === '/api/health' && request.method === 'GET') {
+        const hosting = websiteRuntime?.status();
+        return send(200, { status: 'ok', mode: 'admin', version: '1.4.0', revision: settings.revision || 'local', draining,
+          ...(hosting ? { websites: { available: hosting.available, localOrigin: hosting.localOrigin,
+            publicOrigin: hosting.publicOrigin || (hosting.tunnel?.state === 'ready' ? hosting.tunnel.url : null), state: hosting.tunnel?.state } } : {}) });
+      }
       const token = tokenFrom(request);
       const session = store.session(token);
       if (pathname === '/api/session' && request.method === 'GET') return send(200, { setupRequired: !store.hasOwner(), authenticated: Boolean(session), csrf: session?.csrf, product: '智作台服务端', port: addressPort });
