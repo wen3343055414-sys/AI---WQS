@@ -42,7 +42,7 @@
       <p id="auth-error" class="form-error" role="alert"></p><button id="auth-submit" type="submit" class="btn primary wide">进入管理后台 <span>→</span></button>
     </form>
     <p class="auth-note"><svg><use href="#i-lock"/></svg>管理密码与工作台密码独立，仅允许本机访问。</p>
-  </div><div class="auth-bottom">智作台服务端 <span>v1.4.0</span></div></div>
+  </div><div class="auth-bottom">智作台服务端 <span>v1.5.0</span></div></div>
 </section>
 
 <div id="app-view" class="app-layout" hidden>
@@ -56,9 +56,9 @@
       <button class="nav-item" data-page="deployment"><svg><use href="#i-update"/></svg>版本与更新</button>
       <button class="nav-item" data-page="audit"><svg><use href="#i-history"/></svg>操作记录</button>
       <button class="nav-item" data-page="api-settings"><svg><use href="#i-api"/></svg>API 接口设置</button>
-      <button class="nav-item" data-page="websites"><svg><use href="#i-globe"/></svg>网站管理<span class="nav-count" id="nav-website-count">0</span></button>
+      <button class="nav-item" data-page="websites" title="域名与网站"><svg><use href="#i-globe"/></svg>域名与网站<span class="nav-count" id="nav-website-count">0</span></button>
     </nav>
-    <div class="sidebar-foot"><div class="node-badge"><span class="node-symbol"><svg><use href="#i-server"/></svg></span><span>本机管理节点<small id="node-address">127.0.0.1:3100</small></span><span class="live-dot"></span></div><div class="sidebar-meta"><span>独立管理服务</span><span>v1.4.0</span></div></div>
+    <div class="sidebar-foot"><div class="node-badge"><span class="node-symbol"><svg><use href="#i-server"/></svg></span><span>本机管理节点<small id="node-address">127.0.0.1:3100</small></span><span class="live-dot"></span></div><div class="sidebar-meta"><span>独立管理服务</span><span>v1.5.0</span></div></div>
   </aside>
   <div class="main-wrap">
     <header class="topbar"><div class="breadcrumb">本机服务器 <span>/</span> <strong id="breadcrumb-page">服务器总览</strong></div><div class="top-actions"><span class="local-tag"><span class="live-dot"></span>LOCAL</span><button class="icon-btn" id="logout" aria-label="退出管理后台" title="退出登录"><svg><use href="#i-exit"/></svg></button><span class="avatar" title="本机管理员">管</span></div></header>
@@ -92,7 +92,7 @@
       <section id="page-deployment" class="page-panel" hidden><div class="two-columns"><article class="panel"><div class="panel-heading"><div><h2>当前部署</h2><p>跟随指定分支，只部署通过验收的代码。</p></div><span class="badge info">CI 验收保护</span></div><div class="panel-body"><div class="version-block"><span>运行版本</span><strong id="current-sha">—</strong><a id="commit-link" target="_blank" rel="noopener" href="https://github.com/wen3343055414-sys/AI---WQS">查看 GitHub 提交 ↗</a></div><dl id="deployment-details" class="detail-list"></dl><div class="button-row"><button class="btn primary" data-action="update"><svg><use href="#i-update"/></svg>检查并更新</button><button class="btn" data-action="rollback">回退上一版本</button></div><p class="helper">更新前备份数据库；新版本启动失败时恢复上一代码版本。</p></div></article><article class="panel"><div class="panel-heading"><h2>自动更新计划</h2><span id="deploy-scheduler-badge" class="badge neutral">读取中</span></div><div class="panel-body"><div class="schedule-visual large"><span class="schedule-icon"><svg><use href="#i-history"/></svg></span><div><strong>每 1 分钟</strong><small>电脑开机、用户登录且 Docker 运行时执行</small></div></div><div class="divider"></div><p class="helper">暂停后不再启动新的定时检查；已在执行的任务会正常完成。</p><div class="button-row"><button class="btn" data-action="pause">暂停自动更新</button><button class="btn primary" data-action="resume">恢复自动更新</button></div><div class="local-info"><svg><use href="#i-info"/></svg><span>回退只切换程序版本，不恢复过去的业务内容。当前数据会保留。</span></div></div></article></div><article class="panel section-gap"><div class="panel-heading"><h2>最近管理任务</h2></div><div id="deployment-jobs" class="activity-list"></div></article></section>
       <section id="page-audit" class="page-panel" hidden><article class="panel"><div class="panel-heading"><div><h2>管理操作记录</h2><p>记录登录、服务控制、版本操作和备份下载。</p></div><span class="tiny-label">最近 40 条</span></div><div class="table-scroll"><table><thead><tr><th>时间</th><th>操作</th><th>结果</th><th>说明</th></tr></thead><tbody id="audit-table"></tbody></table></div></article></section>
       <section id="page-api-settings" class="page-panel" hidden><div id="model-management"><div class="panel empty">正在读取模型连接…</div></div></section>
-      <section id="page-websites" class="page-panel" hidden><div id="website-management"><div class="panel empty">正在读取网站…</div></div></section>
+      <section id="page-websites" class="page-panel" hidden><div id="website-management"><div class="panel empty">正在读取域名与访问地址…</div></div></section>
       <footer class="page-footer"><span>智作台服务端 <span class="footer-divider">/</span> 本机部署</span><span id="last-refreshed"><i class="live-dot"></i>等待首次采样</span></footer>
     </main>
   </div>

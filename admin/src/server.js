@@ -10,9 +10,13 @@ import { SystemManager, ACTIONS } from './system.js';
 import { WindowsKeyVault } from './model-settings.js';
 import { ModelRegistry } from './model-registry.js';
 import { ModelGateway, bridgeToken } from './model-gateway.js';
-import { WebsiteStore, createWebsiteServer } from './websites.js';
+import { WebsiteStore } from './websites.js';
 import { WebsiteTunnel } from './website-tunnel.js';
 import { generateWebsite } from './website-generator.js';
+import { createWorkbenchGateway } from './workbench-gateway.js';
+import { DomainRegistry } from './domain-registry.js';
+import { LanAccess, probeWorkbench } from './lan-access.js';
+import { LanNetwork } from './lan-network.js';
 
 const CODE_ROOT = fileURLToPath(new URL('../', import.meta.url));
 const ROOT = process.env.AI_WQS_ADMIN_HOME ? path.resolve(process.env.AI_WQS_ADMIN_HOME) : CODE_ROOT;
@@ -35,7 +39,7 @@ async function body(request, limit = 8192) {
 function sameToken(left, right) {
   return typeof right === 'string' && /^[a-f0-9]{48}$/.test(right) && left.length === right.length && timingSafeEqual(Buffer.from(left), Buffer.from(right));
 }
-export function createAdminServer({ root = ROOT, settings, store = new AdminStore(path.join(root, 'data')), manager = new SystemManager(root, settings), modelSettings = new ModelRegistry(store, new WindowsKeyVault(root, settings)), modelGateway = new ModelGateway(store, modelSettings, settings.bridgeToken || ''), websites = new WebsiteStore(store), websiteRuntime }) {
+export function createAdminServer({ root = ROOT, settings, store = new AdminStore(path.join(root, 'data')), manager = new SystemManager(root, settings), modelSettings = new ModelRegistry(store, new WindowsKeyVault(root, settings)), modelGateway = new ModelGateway(store, modelSettings, settings.bridgeToken || ''), websites = new WebsiteStore(store), websiteRuntime, domains = new DomainRegistry(store) }) {
   let addressPort = settings.port;
   let draining = false;
   const attempts = new Map();
@@ -77,9 +81,10 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
       }
       if (pathname === '/api/health' && request.method === 'GET') {
         const hosting = websiteRuntime?.status();
-        return send(200, { status: 'ok', mode: 'admin', version: '1.4.0', revision: settings.revision || 'local', draining,
+        return send(200, { status: 'ok', mode: 'admin', version: '1.5.0', revision: settings.revision || 'local', draining,
           ...(hosting ? { websites: { available: hosting.available, localOrigin: hosting.localOrigin,
-            publicOrigin: hosting.publicOrigin || (hosting.tunnel?.state === 'ready' ? hosting.tunnel.url : null), state: hosting.tunnel?.state } } : {}) });
+            publicOrigin: hosting.publicOrigin || (hosting.tunnel?.state === 'ready' ? hosting.tunnel.url : null), state: hosting.state || hosting.tunnel?.state,
+            ...(hosting.target ? { target: hosting.target, lanEnabled: hosting.lanEnabled, lanOrigins: hosting.lanOrigins } : {}) } } : {}) });
       }
       const token = tokenFrom(request);
       const session = store.session(token);
@@ -122,9 +127,37 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
         }
         if (pathname === '/api/overview' && request.method === 'GET') return send(200, { ...(await manager.overview()), jobs: store.jobs(), audit: store.audits(), modelUsage: modelGateway.usage() });
         if (pathname === '/api/model-usage' && request.method === 'GET') return send(200, modelGateway.usage());
+        if (pathname === '/api/domains' && request.method === 'GET') return send(200, { domains: domains.list(), access: websiteRuntime?.access ? await websiteRuntime.access() : { available: false, enabled: false, revision: 0, addresses: [], workbench: { ready: false }, firewall: { state: 'unknown', message: '尚未启动局域网网关。' } } });
+        if (pathname === '/api/domains' && request.method === 'POST') return send(201, domains.add(await body(request)));
+        if (pathname === '/api/domain-access/check' && request.method === 'POST') {
+          await body(request);
+          if (!websiteRuntime?.access) throw new HttpError(503, '工作台访问网关未启动。');
+          return send(200, { domains: domains.list(), access: await websiteRuntime.access({ force: true }) });
+        }
+        if (pathname === '/api/domain-access' && request.method === 'POST') {
+          const input = await body(request);
+          if (!websiteRuntime?.lanAccess || !websiteRuntime?.access || !websiteRuntime.available) throw new HttpError(503, '工作台访问网关未启动。');
+          if (input.enabled === true) {
+            const live = await websiteRuntime.access();
+            if (!live.workbench.ready || live.workbench.setupRequired !== false) throw new HttpError(409, '请先启动本机工作台并设置访问密码，再启用局域网访问。');
+            if (!live.addresses.length) throw new HttpError(409, '未检测到可用的物理局域网连接，请先连接 Wi-Fi 或网线。');
+          }
+          websiteRuntime.lanAccess.save(input);
+          return send(200, { domains: domains.list(), access: await websiteRuntime.access() });
+        }
+        const domainRoute = pathname.match(/^\/api\/domains\/(domain_[a-f0-9]{24})(?:\/(verify|default|delete))?$/);
+        if (domainRoute && request.method === 'POST') {
+          const [, id, action] = domainRoute, input = await body(request);
+          if (action === 'verify') return send(200, await domains.verify(id, input));
+          if (action === 'default') return send(200, domains.setDefault(id, input));
+          if (action === 'delete') { domains.remove(id, input); return send(200, { ok: true }); }
+          return send(200, domains.save(id, input));
+        }
+        if (websiteRuntime?.target === 'workbench' && (pathname === '/api/websites' || pathname.startsWith('/api/websites/'))) throw new HttpError(410, '此模块已调整为工作台域名与访问管理，原网站草稿仍保留。');
         if (pathname === '/api/websites' && request.method === 'GET') return send(200, { sites: websites.list(), hosting: websiteRuntime?.status() || { localOrigin: null, available: false, tunnel: { state: 'stopped', url: null, installed: false, message: '网站访客服务未启动。' } }, models: modelGateway.config() });
         if (pathname === '/api/websites' && request.method === 'POST') return send(201, websites.create(await body(request, 8_000_000)));
         if (pathname === '/api/website-hosting/start' && request.method === 'POST') {
+          if (websiteRuntime?.target === 'workbench' && settings.enablePublicAccess !== true) throw new HttpError(409, '当前按本地局域网部署，未启用公网通道。');
           if (!websiteRuntime?.available) throw new HttpError(503, '网站访客服务不可用，请查看管理服务日志。');
           await body(request);
           const result = await websiteRuntime.tunnel.start();
@@ -240,31 +273,55 @@ async function main() {
   const websitePort = settings.websitePort ?? 3200;
   if (!Number.isInteger(websitePort) || websitePort < 1024 || websitePort > 65535 || websitePort === settings.port) throw new Error('网站访客端口配置无效。');
   const store = new AdminStore(path.join(ROOT, 'data'));
-  const websites = new WebsiteStore(store);
+  const deploymentRoot = path.resolve(ROOT, settings.deploymentRoot || '../AI-WQS-local');
+  let deploymentConfig;
+  try { deploymentConfig = JSON.parse((await readFile(path.join(deploymentRoot, 'config.json'), 'utf8')).replace(/^\uFEFF/, '')); }
+  catch (error) { if (error.code !== 'ENOENT') throw error; deploymentConfig = { port: 3000 }; }
+  const workbenchPort = settings.workbenchPort ?? deploymentConfig.port;
+  if (!Number.isInteger(workbenchPort) || workbenchPort < 1024 || workbenchPort > 65535 || workbenchPort === websitePort || workbenchPort === settings.port) throw new Error('工作台端口配置无效。');
+  const workbenchOrigin = `http://127.0.0.1:${workbenchPort}`;
+  const publicEnabled = settings.enablePublicAccess === true;
+  const websites = new WebsiteStore(store), domains = new DomainRegistry(store, { workbenchOrigin });
+  const lanAccess = new LanAccess(store), network = new LanNetwork({ port: websitePort, nodePath: settings.node });
+  let networkSnapshot = await network.read();
   const tunnel = new WebsiteTunnel({ root: ROOT, port: websitePort, executable: settings.websiteTunnelExecutable });
-  let publicOrigin = null;
-  if (settings.websitePublicOrigin) {
-    const configured = new URL(settings.websitePublicOrigin);
-    if (configured.protocol !== 'https:' || configured.username || configured.password || configured.pathname !== '/' || configured.search || configured.hash) throw new Error('网站公网地址必须为不含路径的 HTTPS 域名。');
-    publicOrigin = configured.origin;
-  }
-  const websiteRuntime = { available: false, localOrigin: `http://127.0.0.1:${websitePort}`, tunnel,
-    status() { return { available: this.available, localOrigin: this.localOrigin, publicOrigin, tunnel: tunnel.status() }; } };
-  const visitor = createWebsiteServer({ websites, allowedHost: hostname => {
-    const quickOrigin = tunnel.status().url;
-    return ['127.0.0.1', 'localhost'].includes(hostname) || [publicOrigin, quickOrigin].some(origin => origin && new URL(origin).hostname === hostname);
-  } });
-  visitor.on('error', error => { websiteRuntime.available = false; console.error('网站访客服务启动失败：', error.message); });
-  visitor.listen(websitePort, '127.0.0.1', () => {
+  let workbenchCheck = null, checkingWorkbench = null;
+  const workbench = async (force = false) => {
+    if (!force && workbenchCheck && Date.now() - workbenchCheck.time < 5000) return workbenchCheck.value;
+    if (checkingWorkbench) return checkingWorkbench;
+    checkingWorkbench = probeWorkbench(workbenchOrigin).then(value => { workbenchCheck = { time: Date.now(), value }; return value; }).finally(() => { checkingWorkbench = null; });
+    return checkingWorkbench;
+  };
+  const websiteRuntime = { target: 'workbench', available: false, localOrigin: `http://127.0.0.1:${websitePort}`, tunnel, lanAccess,
+    status() { const enabled = lanAccess.read().enabled; return { target: this.target, available: this.available, localOrigin: this.localOrigin,
+      publicOrigin: publicEnabled ? domains.defaultOrigin() : null, tunnel: tunnel.status(), state: this.available && enabled ? 'ready' : 'stopped',
+      lanEnabled: enabled, lanOrigins: enabled ? networkSnapshot.addresses.map(item => item.url) : [] }; },
+    async access({ force = false } = {}) {
+      const [lan, upstream] = await Promise.all([network.read({ force }), workbench(force)]);
+      networkSnapshot = lan;
+      return { ...lanAccess.read(), available: this.available, gatewayPort: websitePort, localUrl: workbenchOrigin,
+        addresses: lan.addresses, hostname: lan.hostname, primaryUrl: lan.addresses[0]?.url || null,
+        workbench: upstream, firewall: lan.firewall, checkedAt: lan.checkedAt };
+    } };
+  const publicHost = hostname => publicEnabled && (domains.allowedHost(hostname) || tunnel.status().url && new URL(tunnel.status().url).hostname === hostname);
+  const visitor = createWorkbenchGateway({ upstreamOrigin: workbenchOrigin,
+    allowedHost: hostname => network.allowedHost(hostname) || Boolean(publicHost(hostname)),
+    allowedClient: address => network.allowedClient(address),
+    secureHost: hostname => Boolean(publicHost(hostname)),
+    isEnabled: () => lanAccess.read().enabled || publicEnabled });
+  visitor.on('error', error => { websiteRuntime.available = false; console.error('工作台访问网关启动失败：', error.message); });
+  visitor.listen(websitePort, '0.0.0.0', () => {
     websiteRuntime.available = true;
-    console.log(`${new Date().toISOString()} 网站访客服务已启动：${websiteRuntime.localOrigin}`);
-    tunnel.restore().catch(error => console.error('公网通道未恢复：', error.message));
+    console.log(`${new Date().toISOString()} 工作台访问网关已启动：${websiteRuntime.localOrigin}`);
+    if (publicEnabled) tunnel.restore().catch(error => console.error('公网通道未恢复：', error.message));
   });
-  const { server } = createAdminServer({ store, websites, websiteRuntime, settings: { ...settings, codeRoot: CODE_ROOT, revision: process.env.APP_VERSION || 'local', bridgeToken: await bridgeToken(ROOT) } });
+  const networkRefresh = setInterval(() => { network.read({ force: true }).then(value => { networkSnapshot = value; }).catch(() => {}); }, 30_000); networkRefresh.unref();
+  const { server } = createAdminServer({ store, websites, domains, websiteRuntime, settings: { ...settings, codeRoot: CODE_ROOT, revision: process.env.APP_VERSION || 'local', bridgeToken: await bridgeToken(ROOT) } });
   server.listen(settings.port, '127.0.0.1', () => console.log(`${new Date().toISOString()} 管理服务已启动：http://127.0.0.1:${settings.port}`));
   let stopping = false;
   async function shutdown(code = 0) {
     if (stopping) return; stopping = true;
+    clearInterval(networkRefresh);
     const timeout = setTimeout(() => process.exit(1), 7000); timeout.unref();
     await tunnel.shutdown();
     await Promise.all([server, visitor].map(listener => new Promise(resolve => { listener.close(resolve); listener.closeIdleConnections(); })));

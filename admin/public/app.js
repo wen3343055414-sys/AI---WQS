@@ -12,7 +12,7 @@ const pages = {
   deployment: ['版本与更新', 'RELEASE MANAGEMENT', '每一次更新，都有检查和退路。'],
   audit: ['操作记录', 'ACTIVITY HISTORY', '管理操作有记录，运行过程可追溯。'],
   'api-settings': ['API 接口设置', 'MODEL API SETTINGS', '统一连接国内、海外与本机模型，让每次对话都有合适的选择。'],
-  websites: ['网站管理', 'WEBSITE PUBLISHING', '从一个想法到可访问的网址，在这里编辑并发布你的网站。'],
+  websites: ['域名与网站', 'DOMAINS & WEBSITES', '管理工作台的真实访问地址，让同一网络下的设备连接本机服务。'],
 };
 const actions = {
   start: ['启动工作台', '启动前后端容器，并检查服务是否正常。'],
@@ -100,6 +100,7 @@ function navigate(page) {
   if (!pages[page]) return;
   if (currentPage === 'websites' && page !== currentPage && !websiteUI.canLeave()) return;
   currentPage = page;
+  $('app-view').classList.toggle('domains-mode', page === 'websites');
   document.querySelectorAll('.page-panel').forEach(node => { node.hidden = node.id !== `page-${page}`; });
   document.querySelectorAll('.nav-item').forEach(node => { const selected = node.dataset.page === page; node.classList.toggle('active', selected); node.setAttribute('aria-current', selected ? 'page' : 'false'); });
   const [title, eyebrow, description] = pages[page];
