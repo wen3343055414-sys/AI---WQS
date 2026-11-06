@@ -1971,3 +1971,5 @@ dialog::backdrop {
 [data-theme="dark"] .server-access::backdrop{background:#172239ed}
 [data-theme="dark"] .sync-banner{background:#28354f;color:#b4c6ef;border-color:#3b4c6d}
 @media(max-width:760px){.server-sync-label{display:none}.server-login{padding:27px}.server-login h1{font-size:21px}.sync-banner{font-size:10px;padding:12px}.sync-banner>span{min-width:100%}}
+.model-request-status{display:flex;align-items:center;gap:12px;margin:12px 0 24px;padding:16px 20px;border-radius:10px;background:var(--surface,#f4f7fd);color:var(--muted,#6b7890);font-size:13px;line-height:1.8}.model-request-status.failed{flex-wrap:wrap;border:1px solid #e9d8c9}.model-spinner{height:16px;width:16px;border:2px solid #d9e3fb;border-top-color:#4263df;border-radius:50%;animation:model-spin 1s linear infinite;flex-shrink:0}@keyframes model-spin{to{transform:rotate(360deg)}}.composer button:disabled{opacity:.55;cursor:wait}
+.ai-model-select{max-width:260px!important;min-width:145px;text-overflow:ellipsis}.composer-controls{flex-wrap:wrap}@media(max-width:600px){.ai-model-select{max-width:190px!important;min-width:120px;font-size:11px}.composer-bottom{gap:10px;align-items:flex-end}}

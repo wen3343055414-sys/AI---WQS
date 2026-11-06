@@ -1,10 +1,18 @@
 # 智作台 · 本机服务器版
 
-中文 AI 工作台，提供前端界面、数据后端、SQLite 数据库及 Linux Docker Desktop 部署。在 GPT / Codex 中开发代码，通过 GitHub 保存版本，由本机后台服务自动部署通过检查的新提交。
+中文 AI 工作台，包含前端、数据后端、SQLite 数据库，以及独立的 Windows 管理服务。实际开发源代码统一保存在本仓库，在本地或云端完成验证并推送后，本机更新通过 GitHub CI 的版本。
 
-**工作空间数据后端已实现；模型回复仍为明确标注的演示，尚未调用模型 API。** 开发、保存和部署流程无需 OpenAI API 密钥。
+工作台入口为 **http://127.0.0.1:3000**，Windows 智作台服务端入口为 **http://127.0.0.1:3100**。在服务端接入多个模型服务、启用模型并设置默认模型后，前端自动同步，也可以在对话输入框选择其他已启用模型。支持 OpenAI 兼容、Claude Messages 和 Gemini 原生文本对话协议。历史演示记录保留原标记；静态 GitHub Pages 版本没有本机模型桥接。
 
-## 第一次安装
+## 本地、云端与 GitHub 同步
+
+两端均使用本仓库的 `codex/gpt-docker-github` 分支，按 [代码同步说明](docs/source-sync.md) 开发：先拉取、修改和验证，再提交推送。运行目录和聊天窗口里的未提交片段不参与代码发布。
+
+Windows 更新任务每分钟检查 GitHub，等待**同一提交的 push CI 全部通过**，再构建 Docker 前后端、备份数据并切换独立服务端。管理页面“版本与更新”显示仓库、分支、Docker 与服务端的提交版本。失败时恢复上一版本代码，保留当前数据库。
+
+源码目录为 `public/`、`src/`、`admin/` 和 `ops/windows/`。API 密钥、密码、业务数据库、聊天内容、内部认证令牌和本机路径配置留在运行目录，不上传 GitHub。Windows 安装布局及自更新流程见 [代码同步说明](docs/source-sync.md)，管理功能见 [服务端说明](admin/README.md)。
+
+## Linux Docker 安装
 
 Linux 本机需要 Git、Python 3 和已启动的 Docker Desktop。以日常使用 Docker Desktop 的用户运行：
 
@@ -40,7 +48,9 @@ GitHub 保存代码与公开开发摘要，业务数据保存在本机数据库�
 
 ## 已有功能
 
-首页、AI 演示对话、提示词管理与收藏、知识资料与正文搜索、任务记录、全局搜索、深色主题、JSON 备份恢复，以及本机登录、数据库保存、同步状态和运行版本。
+首页、真实模型对话、提示词管理与收藏、知识资料与正文搜索、任务记录、全局搜索、深色主题、JSON 备份恢复，以及本机登录、数据库保存、同步状态和运行版本。Windows 管理服务提供启停、日志、备份、更新、API 设置和实际 Token 用量。
+
+API 设置按“服务商连接 / 模型列表 / 用量与限额”组织。国内、海外及本机模板支持独立密钥、模型目录获取、手动模型 ID、显示名称、启停、默认模型和月 Token 限额。既有单接口配置自动迁移，设计参考与协议边界见 [多模型管理说明](docs/multi-model-settings.md)。
 
 首次登录空数据库时，会迁入同一站点原有的有效浏览器数据。支持 UTF-8 文本资料；容量边界见 [服务器使用指南](docs/local-server.md)。
 
@@ -81,6 +91,8 @@ docker --context desktop-linux compose -f compose.yaml -f compose.dev.yaml up --
 ```
 
 CI 验证应用、更新器规则和实际前后端容器。`GET /api/health` 表示服务可用，`GET /api/status` 提供版本与登录状态，工作空间接口需要登录。
+
+Windows 使用 `python -m unittest discover -s tests -p 'test_windows_*.py'`，避免运行仅支持 Linux 的 fcntl 更新器测试；另运行 `python -m unittest discover -s admin/tests -p 'test_*.py'`。`npm test` 同时运行工作台和管理服务测试，包含 Windows DPAPI 验证。推送前运行 `node scripts/check-source.mjs` 检查源码边界。
 
 ## 静态部署与保存规则
 
