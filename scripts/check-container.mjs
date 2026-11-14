@@ -25,6 +25,8 @@ try {
     ["/app.js", "javascript"],
     ["/core.js", "javascript"],
     ["/sync.js", "javascript"],
+    ["/auth.js", "javascript"],
+    ["/auth.css", "text/css"],
     ["/styles.css", "text/css"],
     ["/favicon.svg", "image/svg+xml"],
   ]) {

@@ -1,0 +1,122 @@
+import assert from "node:assert/strict";
+import { spawn } from "node:child_process";
+import { once } from "node:events";
+import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { randomBytes } from "node:crypto";
+
+const { chromium } = await import(process.env.PLAYWRIGHT_MODULE_PATH ? pathToFileURL(process.env.PLAYWRIGHT_MODULE_PATH).href : "playwright");
+const directory = await mkdtemp(path.join(tmpdir(), "wqs-auth-ui-"));
+const output = path.resolve("artifacts/auth");
+await mkdir(output, { recursive: true });
+const child = spawn(process.execPath, ["src/server.js"], { env: { ...process.env, HOST: "127.0.0.1", PORT: "0", DATA_DIR: directory, APP_VERSION: "auth-preview" }, stdio: ["ignore", "pipe", "pipe"] });
+let browser;
+try {
+  const base = await new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error("UI server startup timed out")), 10000);
+    child.stdout.on("data", data => { const match = String(data).match(/http:\/\/127\.0\.0\.1:\d+/); if (match) { clearTimeout(timer); resolve(match[0]); } });
+    child.once("error", reject);
+    child.once("exit", code => { clearTimeout(timer); if (code) reject(new Error("UI server exited")); });
+  });
+  const password = randomBytes(18).toString("hex");
+  const bobPassword = randomBytes(18).toString("hex");
+  const setup = await fetch(base + "/api/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ password }) });
+  assert.equal(setup.status, 200);
+  const cookie = setup.headers.get("set-cookie").split(";")[0];
+  const initial = await (await fetch(base + "/api/workspace", { headers: { Cookie: cookie } })).json();
+  initial.state.prompts[0].title = "原有工作空间记录";
+  const saved = await fetch(base + "/api/workspace", { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({ state: initial.state, baseRevision: initial.revision }) });
+  assert.equal(saved.status, 200);
+  browser = await chromium.launch({ channel: "chrome", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
+  const context = await browser.newContext({ viewport: { width: 1440, height: 960 } });
+  await context.addInitScript(state => localStorage.setItem("zhizuotai.workspace.v1", JSON.stringify(state)), initial.state);
+  const page = await context.newPage();
+  const errors = [];
+  page.on("pageerror", error => errors.push(error.message));
+  await page.goto(base, { waitUntil: "networkidle" });
+  const modal = page.locator(".server-access");
+  await page.locator(".server-access[open]").waitFor();
+  assert.doesNotMatch(await modal.innerText(), /本机|服务器|数据库/);
+  assert.equal(await page.getByRole("tab").count(), 3);
+  assert.equal(await page.locator("#auth-account").inputValue(), "admin");
+  await page.screenshot({ path: path.join(output, "login-account-desktop.png") });
+  await page.locator("#auth-password").fill("visibility-test");
+  await page.getByRole("button", { name: "显示密码", exact: true }).click();
+  assert.equal(await page.locator("#auth-password").getAttribute("type"), "text");
+  await page.getByRole("button", { name: "隐藏密码", exact: true }).click();
+  assert.equal(await page.locator("#auth-password").getAttribute("type"), "password");
+  await page.getByRole("tab", { name: "账号密码", exact: true }).focus();
+  await page.keyboard.press("ArrowRight");
+  assert.equal(await page.getByRole("tab", { name: "手机验证码", exact: true }).getAttribute("aria-selected"), "true");
+  await page.screenshot({ path: path.join(output, "login-phone-desktop.png") });
+  await page.locator("#auth-phone").fill("13800000000");
+  await page.getByRole("button", { name: "获取验证码", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "手机验证码登录暂未开通" }).waitFor();
+  assert.equal(await page.getByRole("button", { name: "获取验证码", exact: true }).isDisabled(), false);
+  await page.getByRole("tab", { name: "邮箱密码", exact: true }).click();
+  await page.screenshot({ path: path.join(output, "login-email-desktop.png") });
+  await page.getByRole("button", { name: "去注册", exact: true }).click();
+  await page.getByRole("heading", { name: "创建你的账号", exact: true }).waitFor();
+  assert.doesNotMatch(await modal.innerText(), /本机|服务器|数据库/);
+  assert.equal(await page.locator("#auth-account").inputValue(), "");
+  await page.screenshot({ path: path.join(output, "register-desktop.png") });
+  await page.locator("#auth-account").fill("bob");
+  await page.locator("#auth-email").fill("bob@example.test");
+  await page.locator("#auth-password").fill(bobPassword);
+  await page.locator("#auth-confirm").fill("different-password");
+  await page.getByRole("button", { name: "注册并登录", exact: true }).click();
+  await page.getByRole("alert").filter({ hasText: "两次输入的密码不一致" }).waitFor();
+  await page.locator("#auth-confirm").fill(bobPassword);
+  await page.getByRole("button", { name: "注册并登录", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector(".server-access").open);
+  await page.goto(base + "/#prompts");
+  assert.equal(await page.getByRole("heading", { name: "原有工作空间记录", exact: true }).count(), 0);
+  await page.getByRole("button", { name: "新建提示词", exact: true }).click();
+  await page.locator('#prompt-form input[name="title"]').fill("Bob 的独立提示词");
+  await page.locator('#prompt-form textarea[name="content"]').fill("这是新账号的独立工作空间。");
+  await page.locator('#prompt-form button[type="submit"]').click();
+  await page.waitForFunction(() => document.querySelector("[data-server-label]")?.textContent === "已同步到本机数据库");
+  const logout = async () => {
+    await page.goto(base + "/#settings");
+    await page.locator('[data-sync="logout"]').click();
+    await page.locator(".server-access[open]").waitFor();
+  };
+  await logout();
+  await page.getByRole("tab", { name: "邮箱密码", exact: true }).click();
+  await page.locator("#auth-email").fill("bob@example.test");
+  await page.locator("#auth-password").fill(bobPassword);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector(".server-access").open);
+  await page.goto(base + "/#prompts");
+  await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).waitFor();
+  await logout();
+  await page.getByRole("tab", { name: "账号密码", exact: true }).click();
+  await page.locator("#auth-account").fill("admin");
+  await page.locator("#auth-password").fill(password);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector(".server-access").open);
+  await page.goto(base + "/#prompts");
+  await page.getByRole("heading", { name: "原有工作空间记录", exact: true }).waitFor();
+  assert.equal(await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).count(), 0);
+  await logout();
+  for (const width of [390, 320]) {
+    await page.setViewportSize({ width, height: 844 });
+    for (const method of ["账号密码", "手机验证码", "邮箱密码"]) {
+      await page.getByRole("tab", { name: method, exact: true }).click();
+      assert.ok(await modal.evaluate(element => element.scrollWidth <= element.clientWidth && element.getBoundingClientRect().width <= innerWidth), "Login must fit width " + width);
+    }
+    await page.screenshot({ path: path.join(output, "login-mobile-" + width + ".png") });
+    await page.getByRole("button", { name: "去注册", exact: true }).click();
+    assert.ok(await modal.evaluate(element => element.scrollWidth <= element.clientWidth));
+    await page.screenshot({ path: path.join(output, "register-mobile-" + width + ".png") });
+    await page.getByRole("button", { name: "去登录", exact: true }).click();
+  }
+  assert.deepEqual(errors, []);
+  console.log("Authentication UI passed: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
+} finally {
+  if (browser) await browser.close();
+  if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill(); await stopped; }
+  await rm(directory, { recursive: true, force: true });
+}
