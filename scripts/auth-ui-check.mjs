@@ -199,6 +199,21 @@ try {
   await page.goto(base + "/#prompts");
   await page.getByRole("heading", { name: "原有工作空间记录", exact: true }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).count(), 0);
+  await page.setViewportSize({ width: 1024, height: 900 });
+  await page.goto(base + "/#home");
+  assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
+  assert.ok(await page.locator(".side-panel").evaluate(element => {
+    const note = element.querySelector(".note-card").getBoundingClientRect();
+    return Math.abs(note.width - element.getBoundingClientRect().width) < 1;
+  }), "Moving workspace statistics must not leave an empty tablet column");
+  assert.ok(await page.locator("#sidebar").evaluate(element => {
+    const link = element.querySelector(".sidebar-settings").getBoundingClientRect();
+    const menu = element.getBoundingClientRect();
+    return link.left >= menu.left && link.right <= menu.right;
+  }));
+  await page.goto(base + "/#settings");
+  assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth));
+  await page.screenshot({ path: path.join(output, "settings-account-tablet.png") });
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(base + "/#home");

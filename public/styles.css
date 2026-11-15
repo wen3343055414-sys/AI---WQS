@@ -1979,6 +1979,10 @@ dialog::backdrop {
 .settings-workspace-stats > div { display: flex; flex-direction: column; gap: 9px; align-items: center; padding: 18px 6px 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); text-align: center; }
 .settings-workspace-stats strong { color: var(--text); font-size: 24px; font-weight: 650; line-height: 1.1; }
 .settings-workspace-stats span { color: var(--muted); font-size: 10px; line-height: 1.6; }
+@media (max-width: 1250px) {
+  .sidebar-settings-wrap { margin-left: -13px; margin-right: -13px; }
+  .side-panel { grid-template-columns: minmax(0, 1fr); }
+}
 @media (max-width: 760px) {
   .account-settings .settings-actions { flex-direction: column; }
   .account-settings .settings-actions .btn { width: 100%; justify-content: center; }
