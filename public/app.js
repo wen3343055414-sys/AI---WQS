@@ -16,12 +16,20 @@ import {
   removeSession,
   searchWorkspace,
   STARTERS,
+  BUILTIN_TOOLS,
+  saveTodo,
+  setTodoDone,
+  removeTodo,
+  enabledToolIds,
+  setToolEnabled,
+  summarizeText,
 } from "./core.js";
 import { WorkspaceSync } from "./sync.js";
 
 const paths = {
   spark:
     '<path d="m14 3 2.5 6.5L23 12l-6.5 2.5L14 21l-2.5-6.5L5 12l6.5-2.5L14 3Z"/><path d="m4 2 .8 2.2L7 5l-2.2.8L4 8l-.8-2.2L1 5l2.2-.8L4 2Z"/>',
+  puzzle: '<path d="M8 3H3v5a3 3 0 1 1 0 6v7h7a3 3 0 1 1 6 0h5v-7a3 3 0 1 0 0-6V3h-7a3 3 0 1 1-6 0Z"/>',
   home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
   chat: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z"/><path d="M7 9h9M7 13h6"/>',
   layers: '<path d="m12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5"/>',
@@ -76,10 +84,12 @@ const iconButton = (action, label, name, extra = "") =>
     `aria-label="${e(label)}" title="${e(label)}" ${extra}`,
   );
 const nav = [
+  ["todo", "任务", "list"],
   ["home", "首页", "home"],
   ["chat", "AI 对话", "chat"],
   ["prompts", "提示词库", "layers"],
   ["knowledge", "知识库", "book"],
+  ["plugins", "插件", "puzzle"],
   ["tasks", "历史对话", "history"],
   ["settings", "设置", "settings"],
 ];
@@ -100,7 +110,9 @@ let promptFilter = "全部",
   promptQuery = "",
   documentFilter = "全部",
   documentQuery = "",
-  historyQuery = "";
+  historyQuery = "",
+  todoFilter = "全部",
+  todoQuery = "";
 const drafts = new Map();
 let pendingType = "AI 对话";
 let focusNewConversation = false;
@@ -421,6 +433,60 @@ function knowledgePage() {
     `<div class="upload-zone" id="upload-zone">${icon("upload")}<strong>把资料放在这里，给思考一个起点</strong><p>拖拽文件至此，或点击选择文件 · 每个文件不超过 1 MB</p>${button("upload", "选择文件", "plus", "btn")}<input type="file" id="file-input" multiple hidden /></div><div class="toolbar"><div id="document-tabs">${documentTabs()}</div>${searchField("document-search", "搜索文件名、标签或文本…", documentQuery)}</div><div id="document-results" aria-live="polite">${documentResults()}</div>`
   );
 }
+function todoResults() {
+  const query = todoQuery.trim().toLocaleLowerCase();
+  const items = (state.todos || []).filter(todo =>
+    (todoFilter === "全部" || todo.done === (todoFilter === "已完成")) &&
+    (!query || (todo.title + " " + todo.notes).toLocaleLowerCase().includes(query)))
+    .sort((one, two) => Number(one.done) - Number(two.done) || two.updatedAt.localeCompare(one.updatedAt));
+  if (!items.length) return empty("list", query || todoFilter !== "全部" ? "没有符合条件的任务" : "从一个小任务开始",
+    query || todoFilter !== "全部" ? "试试其他关键词或筛选条件。" : "把想做的事记下来，完成一项，前进一步。",
+    query || todoFilter !== "全部" ? "" : button("new-todo", "新建任务", "plus", "btn"));
+  return '<div class="todo-list">' + items.map(todo => `<article class="todo-item ${todo.done ? "is-done" : ""}" data-todo-id="${e(todo.id)}">
+    ${button("toggle-todo", icon("check"), "", "todo-toggle", `data-id="${e(todo.id)}" role="checkbox" aria-checked="${todo.done}" aria-label="${todo.done ? "恢复待办" : "标记完成"}：${e(todo.title)}"`)}
+    <div class="todo-copy"><h2>${e(todo.title)}</h2>${todo.notes ? `<p>${e(todo.notes)}</p>` : ""}<small>${todo.done ? "已完成" : "待完成"} · 更新于 ${dateText(todo.updatedAt, true)}</small></div>
+    <div class="todo-actions">${iconButton("edit-todo", `编辑任务：${todo.title}`, "pen", `data-id="${e(todo.id)}"`)}${iconButton("delete-todo", `删除任务：${todo.title}`, "trash", `data-id="${e(todo.id)}"`)}</div>
+  </article>`).join("") + "</div>";
+}
+function todoPage() {
+  const items = state.todos || [], completed = items.filter(todo => todo.done).length;
+  return heading("任务", "把计划拆成清晰的下一步。", button("new-todo", "新建任务", "plus", "btn btn-primary")) +
+    `<div class="todo-overview" aria-label="任务概览"><div><span>全部任务</span><strong>${items.length}</strong></div><div><span>待完成</span><strong>${items.length - completed}</strong></div><div><span>已完成</span><strong>${completed}</strong></div></div>
+    <div class="toolbar todo-toolbar"><div id="todo-tabs">${tabs(["全部", "待完成", "已完成"], todoFilter, "todo-filter")}</div>${searchField("todo-search", "搜索任务名称或备注…", todoQuery)}</div>
+    <div id="todo-results" aria-live="polite">${todoResults()}</div>`;
+}
+function pluginsPage() {
+  const enabled = enabledToolIds(state);
+  return heading("插件", "常用工具，按需启用。") +
+    `<div class="plugins-summary"><span>内置工具</span><small>已启用 ${enabled.length} / ${BUILTIN_TOOLS.length}</small></div>
+    <div class="plugin-grid">${BUILTIN_TOOLS.map(tool => {
+      const active = enabled.includes(tool.id);
+      return `<article class="plugin-card" data-tool-id="${tool.id}"><div class="plugin-card-top"><span class="tile-icon tone-${tool.tone}">${icon(tool.icon)}</span>${button("toggle-tool", `<span class="tool-switch-track"><span></span></span><span>${active ? "已启用" : "已停用"}</span>`, "", "tool-switch", `data-id="${tool.id}" role="switch" aria-label="${e(tool.title)}" aria-checked="${active}"`)}</div>
+        <h2>${e(tool.title)}</h2><p>${e(tool.description)}</p><div class="plugin-card-bottom"><span>内置工具</span>${button("use-tool", "使用工具", "arrow", "btn", `data-id="${tool.id}" ${active ? "" : "disabled"}`)}</div></article>`;
+    }).join("")}</div><p class="plugins-note">工具启用偏好随当前账号保存。</p>`;
+}
+function todoEditor(id = "") {
+  const todo = (state.todos || []).find(item => item.id === id);
+  if (id && !todo) throw new Error("任务已不存在，请刷新后重试。");
+  openDialog(todo ? "编辑任务" : "新建任务",
+    `<form id="todo-form" class="dialog-body" data-id="${e(id)}"><label>任务名称<input class="input" name="title" maxlength="100" required value="${e(todo?.title || "")}" placeholder="下一步，想完成什么？" autofocus /></label>
+    <label>备注<textarea class="input" name="notes" maxlength="2000" placeholder="补充任务背景或具体步骤（选填）">${e(todo?.notes || "")}</textarea></label>
+    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存任务</button></div></form>`);
+}
+function textStatResults(text) {
+  const summary = summarizeText(text);
+  return [["characters", "字符"], ["nonWhitespace", "非空字符"], ["lines", "行"], ["paragraphs", "段落"]]
+    .map(([key, label]) => `<div><strong data-stat="${key}">${summary[key]}</strong><span>${label}</span></div>`).join("");
+}
+function useTool(id) {
+  if (!enabledToolIds(state).includes(id)) throw new Error("请先启用此工具。");
+  if (id === "workspace-search") showSearch();
+  else if (id === "text-stats") openDialog("文本统计",
+    `<div class="dialog-body"><label for="tool-text">待统计文本<textarea id="tool-text" class="input" maxlength="50000" placeholder="在这里输入或粘贴文本…" autofocus></textarea></label><div class="text-stat-results" id="text-stat-results" aria-live="polite">${textStatResults("")}</div></div>`);
+  else if (id === "data-export") openDialog("数据导出",
+    `<div class="dialog-body"><p>导出当前账号的全部工作空间内容，保存为 JSON 备份。</p><ul class="export-summary"><li>${(state.todos || []).length} 项任务</li><li>${state.sessions.length} 段对话</li><li>${state.prompts.length} 个提示词</li><li>${state.documents.length} 份资料</li></ul><p class="field-help">备份包含插件偏好，可在设置的“本地数据”中恢复。</p><div class="dialog-actions">${button("export-all", "导出 JSON 备份", "download", "btn btn-primary")}</div></div>`);
+}
+
 function historyResults() {
   const sessions = sortedConversations(historyQuery);
   return (historyQuery.trim() ? `<p class="history-result-count">找到 ${sessions.length} 段对话</p>` : "") +
@@ -485,7 +551,7 @@ function settingsPage() {
       )
       .join(
         "",
-      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(activeModel().ready ? activeModel().model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、历史对话与资料正文。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
+      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(activeModel().ready ? activeModel().model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用帮助</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、历史对话与资料正文。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol><div class="settings-actions">${button("help", "打开使用帮助", "help", "btn")}</div></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
   );
 }
 function accountSettings() {
@@ -527,14 +593,14 @@ function render() {
   document.title = `${title} · 智作台`;
   document.body.classList.remove("sidebar-open");
   app.innerHTML = `<div class="app-shell"><aside class="sidebar" id="sidebar" aria-label="主导航"><a class="brand" href="#home" aria-label="智作台首页"><span class="brand-mark">${icon("spark")}</span><span><span class="brand-name">智作台</span><span class="brand-caption">YOUR AI WORKSPACE</span></span></a><p class="workspace-label">工作空间</p><nav aria-label="工作空间导航">${button("new-chat", "新对话", "plus", "btn btn-primary sidebar-new-chat")}${nav
-    .slice(0, 5)
+    .filter(([id]) => id !== "settings")
     .map(
       ([id, label, name]) =>
         `<a class="nav-link ${page === id ? "active" : ""}" href="#${id}" ${page === id ? 'aria-current="page"' : ""}>${icon(name)}${label}${id === "prompts" && page !== id ? `<span class="count">${state.prompts.length}</span>` : ""}</a>`,
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置<small>账号、工作空间与偏好</small></span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span>${iconButton("help", "使用帮助", "help")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置<small>账号、工作空间与偏好</small></span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span></div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
   // The menu button needs one class attribute to remain available on small screens.
   document.querySelector("[data-menu-button]").classList.add("mobile-menu");
   document.querySelector("#sidebar").inert = mobile.matches;
@@ -586,7 +652,7 @@ function showDocument(id) {
 function showSearch() {
   openDialog(
     "搜索工作空间",
-    `<div class="global-search-input">${icon("search")}<input type="search" id="global-search" aria-label="搜索提示词、历史对话与资料" maxlength="100" placeholder="搜索提示词、历史对话与资料…" autocomplete="off" autofocus /></div><div id="global-results" class="search-results" aria-live="polite">${empty("search", "把需要的内容，找回来", "输入关键词，搜索你的整个工作空间。")}</div><div class="search-help">输入关键词搜索 · Tab 选择结果 · Esc 关闭</div>`,
+    `<div class="global-search-input">${icon("search")}<input type="search" id="global-search" aria-label="搜索任务、提示词、历史对话与资料" maxlength="100" placeholder="搜索任务、提示词、历史对话与资料…" autocomplete="off" autofocus /></div><div id="global-results" class="search-results" aria-live="polite">${empty("search", "把需要的内容，找回来", "输入关键词，搜索你的整个工作空间。")}</div><div class="search-help">输入关键词搜索 · Tab 选择结果 · Esc 关闭</div>`,
     "search-dialog",
   );
   document.querySelector("#global-search").focus();
@@ -597,7 +663,7 @@ function updateSearch(query) {
     ? results
         .map(
           (r) =>
-            `<button class="search-result" data-action="search-result" data-kind="${r.kind}" data-id="${r.id}">${icon({ prompt: "layers", session: "chat", document: "file", task: "history" }[r.kind])}<span><strong>${e(r.title)}</strong><small>${e(r.label)}</small></span></button>`,
+            `<button class="search-result" data-action="search-result" data-kind="${r.kind}" data-id="${r.id}">${icon({ prompt: "layers", session: "chat", document: "file", task: "history", todo: "list" }[r.kind])}<span><strong>${e(r.title)}</strong><small>${e(r.label)}</small></span></button>`,
         )
         .join("")
     : empty(
@@ -751,6 +817,48 @@ async function handleAction(target) {
         document.querySelector("#message-input").value = "";
       focusNewConversation = true;
       go("chat");
+      break;
+    case "new-todo":
+      todoEditor();
+      break;
+    case "edit-todo":
+      todoEditor(id);
+      break;
+    case "toggle-todo": {
+      const todo = (state.todos || []).find(item => item.id === id);
+      if (!todo) throw new Error("任务已不存在。");
+      mutate(next => setTodoDone(next, id, !todo.done));
+      render();
+      document.querySelector('#todo-results [data-action="toggle-todo"][data-id="' + id + '"]')?.focus();
+      toast(todo.done ? "已恢复为待办任务" : "任务已完成");
+      break;
+    }
+    case "delete-todo": {
+      const todo = (state.todos || []).find(item => item.id === id);
+      if (!todo) break;
+      confirmDialog("删除这项任务？", todo.title, "删除任务", () => {
+        mutate(next => removeTodo(next, id));
+        render();
+        toast("任务已删除");
+      });
+      break;
+    }
+    case "todo-filter":
+      if (!["全部", "待完成", "已完成"].includes(id)) break;
+      todoFilter = id;
+      render();
+      document.querySelector('#todo-tabs [data-id="' + id + '"]')?.focus();
+      break;
+    case "toggle-tool": {
+      const enabled = !enabledToolIds(state).includes(id);
+      mutate(next => setToolEnabled(next, id, enabled));
+      render();
+      document.querySelector('[data-action="toggle-tool"][data-id="' + id + '"]')?.focus();
+      toast(enabled ? "工具已启用" : "工具已停用");
+      break;
+    }
+    case "use-tool":
+      useTool(id);
       break;
     case "new-document":
       closeDialog();
@@ -925,6 +1033,7 @@ async function handleAction(target) {
       if (kind === "prompt") promptEditor(id);
       else if (kind === "document") showDocument(id);
       else if (kind === "session") go("chat", id);
+      else if (kind === "todo") todoEditor(id);
       else {
         const task = state.tasks.find((t) => t.id === id);
         if (task) go("chat", task.sessionId);
@@ -951,14 +1060,15 @@ async function handleAction(target) {
     case "reset":
       confirmDialog(
         "重置整个工作台？",
-        "所有对话和资料将被清除，提示词和设置恢复初始值。建议先导出备份。此操作无法撤销。",
+        "所有任务、对话和资料将被清除，提示词和设置恢复初始值。建议先导出备份。此操作无法撤销。",
         "确认重置",
         () => {
           const next = createInitialState();
           persist(next);
           drafts.clear();
           promptFilter = documentFilter = "全部";
-          promptQuery = documentQuery = historyQuery = "";
+          promptQuery = documentQuery = historyQuery = todoQuery = "";
+          todoFilter = "全部";
           render();
           toast("工作台已重置");
         },
@@ -985,7 +1095,7 @@ async function handleAction(target) {
     case "help":
       openDialog(
         "欢迎使用智作台",
-        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
+        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办并标记完成；在插件中启用搜索、文本统计和数据导出。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
       );
       break;
   }
@@ -1005,12 +1115,19 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("submit", (event) => {
   const form = event.target;
-  if (!["message-form", "prompt-form", "tag-form"].includes(form.id)) return;
+  if (!["message-form", "prompt-form", "tag-form", "todo-form"].includes(form.id)) return;
   event.preventDefault();
   const data = new FormData(form);
   try {
     if (form.id === "message-form") {
       sendChat(String(data.get('message')), form.dataset.draft).catch(error => toast(error.message, true));
+    } else if (form.id === "todo-form") {
+      mutate(next => saveTodo(next, form.dataset.id, { title: String(data.get("title")), notes: String(data.get("notes")) }));
+      todoFilter = "全部";
+      todoQuery = "";
+      closeDialog();
+      render();
+      toast("任务已保存");
     } else if (form.id === "prompt-form") {
       const title = String(data.get("title")).trim(),
         content = String(data.get("content")).trim();
@@ -1068,6 +1185,11 @@ document.addEventListener("input", (event) => {
     historyQuery = value;
     document.querySelector("#history-results").innerHTML = historyResults();
   }
+  if (id === "todo-search") {
+    todoQuery = value;
+    document.querySelector("#todo-results").innerHTML = todoResults();
+  }
+  if (id === "tool-text") document.querySelector("#text-stat-results").innerHTML = textStatResults(value);
   if (id === "global-search") updateSearch(value);
   if (id === "message-input")
     drafts.set(event.target.form.dataset.draft, value);
@@ -1109,13 +1231,14 @@ document.addEventListener("change", async (event) => {
         throw new Error("备份格式不符合智作台的数据规范，未修改当前数据。");
       confirmDialog(
         "恢复这份备份？",
-        `将替换当前本地数据：${next.prompts.length} 个提示词、${next.sessions.length} 段会话、${next.documents.length} 份资料。建议先导出现有数据。`,
+        `将替换当前本地数据：${next.prompts.length} 个提示词、${next.sessions.length} 段会话、${next.documents.length} 份资料、${(next.todos || []).length} 项任务。建议先导出现有数据。`,
         "替换并恢复",
         () => {
           persist(next);
           drafts.clear();
           promptFilter = documentFilter = "全部";
-          promptQuery = documentQuery = historyQuery = "";
+          promptQuery = documentQuery = historyQuery = todoQuery = "";
+          todoFilter = "全部";
           render();
           toast("备份已恢复");
         },
@@ -1224,7 +1347,8 @@ function clearAccountView() {
   state = createInitialState();
   drafts.clear();
   promptFilter = documentFilter = "全部";
-  promptQuery = documentQuery = historyQuery = "";
+  promptQuery = documentQuery = historyQuery = todoQuery = "";
+  todoFilter = "全部";
   app.innerHTML = "";
   render();
 }
