@@ -1959,3 +1959,36 @@ dialog::backdrop {
 @media(max-width:760px){.server-sync-label{display:none}.sync-banner{font-size:10px;padding:12px}.sync-banner>span{min-width:100%}}
 .model-request-status{display:flex;align-items:center;gap:12px;margin:12px 0 24px;padding:16px 20px;border-radius:10px;background:var(--surface,#f4f7fd);color:var(--muted,#6b7890);font-size:13px;line-height:1.8}.model-request-status.failed{flex-wrap:wrap;border:1px solid #e9d8c9}.model-spinner{height:16px;width:16px;border:2px solid #d9e3fb;border-top-color:#4263df;border-radius:50%;animation:model-spin 1s linear infinite;flex-shrink:0}@keyframes model-spin{to{transform:rotate(360deg)}}.composer button:disabled{opacity:.55;cursor:wait}
 .ai-model-select{max-width:260px!important;min-width:145px;text-overflow:ellipsis}.composer-controls{flex-wrap:wrap}@media(max-width:600px){.ai-model-select{max-width:190px!important;min-width:120px;font-size:11px}.composer-bottom{gap:10px;align-items:flex-end}}
+
+/* Settings entry and account/workspace management. */
+.sidebar-settings-wrap { margin: 16px -18px -18px; padding: 11px 14px 13px; border-top: 1px solid var(--line); }
+.sidebar-settings { min-height: 60px; margin: 0; padding: 11px 13px; gap: 11px; }
+.sidebar-settings > span { min-width: 0; font-size: 13px; font-weight: 650; }
+.sidebar-settings small { display: block; margin-top: 4px; color: var(--muted); font-size: 10px; font-weight: 400; line-height: 1.5; }
+.sidebar-settings > .icon:last-child { width: 16px; height: 16px; margin-left: auto; flex-shrink: 0; }
+.sidebar-settings.active::after { content: none; }
+.settings-grid > .settings-card { margin-bottom: 0; }
+.account-summary { display: flex; align-items: center; gap: 12px; min-width: 0; padding: 16px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); margin: 0 0 20px; }
+.account-avatar { display: grid; place-items: center; flex-shrink: 0; width: 43px; height: 43px; border-radius: 13px; background: var(--tint); color: var(--primary); font-size: 19px; font-weight: 650; }
+.account-identity { min-width: 0; flex: 1; }
+.account-identity strong { display: block; color: var(--text); font-size: 14px; line-height: 1.6; overflow-wrap: anywhere; }
+.account-identity small { display: block; margin-top: 3px; color: var(--muted); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+.account-current-badge { align-self: flex-start; flex-shrink: 0; padding: 4px 7px; border-radius: 5px; background: var(--tint); color: var(--primary); font-size: 10px; line-height: 1.6; }
+.settings-card > .account-help, .settings-card > .workspace-settings-note { margin: 15px 0 0; font-size: 10px; line-height: 1.9; }
+.settings-workspace-stats { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin: 5px 0 18px; }
+.settings-workspace-stats > div { display: flex; flex-direction: column; gap: 9px; align-items: center; padding: 18px 6px 15px; border: 1px solid var(--line); border-radius: 9px; background: var(--soft); text-align: center; }
+.settings-workspace-stats strong { color: var(--text); font-size: 24px; font-weight: 650; line-height: 1.1; }
+.settings-workspace-stats span { color: var(--muted); font-size: 10px; line-height: 1.6; }
+@media (max-width: 1250px) {
+  .sidebar-settings-wrap { margin-left: -13px; margin-right: -13px; }
+  .side-panel { grid-template-columns: minmax(0, 1fr); }
+}
+@media (max-width: 760px) {
+  .account-settings .settings-actions { flex-direction: column; }
+  .account-settings .settings-actions .btn { width: 100%; justify-content: center; }
+  .account-summary { gap: 9px; padding: 12px; flex-wrap: wrap; }
+  .account-identity { flex-basis: calc(100% - 55px); }
+  .account-current-badge { margin-left: 52px; }
+  .settings-workspace-stats { gap: 7px; }
+  .settings-workspace-stats strong { font-size: 22px; }
+}
