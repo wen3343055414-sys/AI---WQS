@@ -103,6 +103,7 @@ let promptFilter = "全部",
   historyQuery = "";
 const drafts = new Map();
 let pendingType = "AI 对话";
+let focusNewConversation = false;
 let toastTimer;
 let dialogOrigin;
 let uploadQueue = Promise.resolve();
@@ -539,6 +540,12 @@ function render() {
   document.querySelector("#sidebar").inert = mobile.matches;
   const messages = document.querySelector("#messages");
   if (messages) messages.scrollTop = messages.scrollHeight;
+  if (focusNewConversation && page === "chat" && !route().id) {
+    focusNewConversation = false;
+    requestAnimationFrame(() => {
+      if (route().page === "chat" && !route().id) document.querySelector("#message-input")?.focus();
+    });
+  }
   sync?.refreshStatus();
 }
 
@@ -742,8 +749,8 @@ async function handleAction(target) {
         document.querySelector("#message-input")?.form.dataset.draft === "new"
       )
         document.querySelector("#message-input").value = "";
+      focusNewConversation = true;
       go("chat");
-      requestAnimationFrame(() => { if (route().page === "chat" && !route().id) document.querySelector("#message-input")?.focus(); });
       break;
     case "new-document":
       closeDialog();
@@ -1208,6 +1215,7 @@ if (initial.warning) toast(initial.warning, true);
 function clearAccountView() {
   chatAccountCycle++;
   chatPending = null;
+  focusNewConversation = false;
   modelConfigPending = false;
   modelConfigChecked = 0;
   modelConfig = { ready: false, model: '', provider: '', message: '请登录后查看模型配置。' };

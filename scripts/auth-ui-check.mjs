@@ -144,13 +144,14 @@ try {
   await page.screenshot({ path: path.join(output, "navigation-home-desktop.png") });
   await page.locator("#message-input").fill("保留首页未发送草稿");
   await page.locator("#sidebar .sidebar-new-chat").click();
-  await page.waitForFunction(() => location.hash === "#chat" && document.activeElement?.id === "message-input");
+  await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
   assert.equal(await page.locator("#message-input").inputValue(), "");
   await page.locator("#message-input").fill("新对话的临时输入");
   await page.locator("#sidebar .sidebar-new-chat").click();
   await page.waitForFunction(() => document.activeElement?.id === "message-input");
   assert.equal(await page.locator("#message-input").inputValue(), "");
   await page.locator('#sidebar .nav-link[href="#home"]').click();
+  await page.waitForFunction(() => location.hash === "#home" && document.querySelector("#message-input")?.form.dataset.draft === "home");
   assert.equal(await page.locator("#message-input").inputValue(), "保留首页未发送草稿");
   await page.locator("#message-input").fill("");
   await page.locator('#sidebar a[href="#tasks"]').click();
@@ -301,7 +302,7 @@ try {
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await assertNavigation();
     await page.locator("#sidebar .sidebar-new-chat").click();
-    await page.waitForFunction(() => location.hash === "#chat" && document.activeElement?.id === "message-input");
+    await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
     assert.equal(await page.locator("#message-input").inputValue(), "");
     assert.equal(await page.locator("body").evaluate(element => element.classList.contains("sidebar-open")), false);
     await page.getByRole("button", { name: "打开导航", exact: true }).click();
