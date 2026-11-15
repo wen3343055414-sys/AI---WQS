@@ -130,7 +130,7 @@ function mutate(fn) {
 function persist(next) {
   if (!validateState(next)) throw new Error("工作空间数据格式无效，未修改已有记录。");
   if (sync?.mode === "server") {
-    if (!sync.authenticated) throw new Error("请先登录本机服务器。");
+    if (!sync.authenticated) throw new Error("请先登录账号。");
     sync.enqueue(next);
   } else {
     if (sync?.mode === "connecting") throw new Error("正在连接服务器，请稍候。");
@@ -1092,7 +1092,19 @@ mobile.addEventListener("change", () => {
 });
 render();
 if (initial.warning) toast(initial.warning, true);
+function clearAccountView() {
+  if (dialog.open) closeDialog();
+  dialog.innerHTML = "";
+  state = createInitialState();
+  drafts.clear();
+  promptFilter = documentFilter = taskFilter = "全部";
+  promptQuery = documentQuery = taskQuery = "";
+  app.innerHTML = "";
+  render();
+}
 sync = new WorkspaceSync({
+  onAccountChange: clearAccountView,
+  onSignedOut: clearAccountView,
   onState(next) {
     if (!validateState(next)) throw new Error("服务器数据格式异常，当前内容仍保留。");
     state = next;
