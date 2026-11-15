@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { once } from "node:events";
-import { mkdtemp, mkdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, rm, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { randomBytes } from "node:crypto";
+import { recordExchange } from "../public/core.js";
 
 const { chromium } = await import(process.env.PLAYWRIGHT_MODULE_PATH ? pathToFileURL(process.env.PLAYWRIGHT_MODULE_PATH).href : "playwright");
 const directory = await mkdtemp(path.join(tmpdir(), "wqs-auth-ui-"));
@@ -27,6 +28,9 @@ try {
   const cookie = setup.headers.get("set-cookie").split(";")[0];
   const initial = await (await fetch(base + "/api/workspace", { headers: { Cookie: cookie } })).json();
   initial.state.prompts[0].title = "原有工作空间记录";
+  const olderSessionId = recordExchange(initial.state, "", "整理产品方案", "AI 对话", "2026-11-14T02:00:00.000Z");
+  recordExchange(initial.state, olderSessionId, "椰风计划只存在于消息正文，请补充执行步骤。", "AI 对话", "2026-11-14T03:00:00.000Z");
+  const newerSessionId = recordExchange(initial.state, "", "规划本周工作", "AI 对话", "2026-11-15T03:00:00.000Z");
   const saved = await fetch(base + "/api/workspace", { method: "PUT", headers: { Cookie: cookie, "Content-Type": "application/json" }, body: JSON.stringify({ state: initial.state, baseRevision: initial.revision }) });
   assert.equal(saved.status, 200);
   browser = await chromium.launch({ channel: "chrome", headless: true, args: ["--no-sandbox", "--disable-dev-shm-usage"] });
@@ -124,6 +128,64 @@ try {
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await page.waitForFunction(() => !document.querySelector(".server-access").open);
   assert.equal(await page.evaluate(() => localStorage.getItem("zhizuotai.auth.preferences.v1")), null);
+  const assertNavigation = async () => {
+    assert.equal(await page.locator("#sidebar .local-card").count(), 0);
+    assert.equal(await page.locator('.topbar [data-action="new"]').count(), 0);
+    assert.equal(await page.locator('.topbar [data-action="new-chat"]').count(), 0);
+    assert.equal(await page.locator('#sidebar a[href="#tasks"]').innerText(), "历史对话");
+    assert.ok(await page.locator("#sidebar").evaluate(element => {
+      const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
+      const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
+      return start.bottom <= home.top;
+    }), "New conversation must appear above Home");
+  };
+  await page.goto(base + "/#home");
+  await assertNavigation();
+  await page.screenshot({ path: path.join(output, "navigation-home-desktop.png") });
+  await page.locator("#message-input").fill("保留首页未发送草稿");
+  await page.locator("#sidebar .sidebar-new-chat").click();
+  await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
+  assert.equal(await page.locator("#message-input").inputValue(), "");
+  await page.locator("#message-input").fill("新对话的临时输入");
+  await page.locator("#sidebar .sidebar-new-chat").click();
+  await page.waitForFunction(() => document.activeElement?.id === "message-input");
+  assert.equal(await page.locator("#message-input").inputValue(), "");
+  await page.locator('#sidebar .nav-link[href="#home"]').click();
+  await page.waitForFunction(() => location.hash === "#home" && document.querySelector("#message-input")?.form.dataset.draft === "home");
+  assert.equal(await page.locator("#message-input").inputValue(), "保留首页未发送草稿");
+  await page.locator("#message-input").fill("");
+  await page.locator('#sidebar a[href="#tasks"]').click();
+  await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
+  const historyLinks = page.locator("#history-results .conversation-link");
+  assert.equal(await historyLinks.count(), 2, "Three requests from two sessions must produce two history entries");
+  assert.deepEqual(await historyLinks.evaluateAll(links => links.map(link => link.getAttribute("href"))), ["#chat/" + newerSessionId, "#chat/" + olderSessionId]);
+  await page.locator("#history-search").fill("椰风计划");
+  assert.equal(await historyLinks.count(), 1);
+  assert.equal(await historyLinks.first().getAttribute("href"), "#chat/" + olderSessionId);
+  await page.locator("#history-search").fill("不存在的历史检索词");
+  await page.getByText("没有找到相关对话", { exact: true }).waitFor();
+  assert.equal(await historyLinks.count(), 0);
+  await page.locator("#history-search").fill("");
+  assert.equal(await historyLinks.count(), 2);
+  await page.screenshot({ path: path.join(output, "navigation-history-desktop.png") });
+  await page.locator('#history-results a[href="#chat/' + olderSessionId + '"]').click();
+  await page.getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
+  assert.equal(await page.locator("#messages .message").count(), 4);
+  await page.locator('#sidebar a[href="#tasks"]').click();
+  const readyDownload = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出对话", exact: true }).click();
+  const historyDownload = await readyDownload;
+  assert.equal(historyDownload.suggestedFilename(), "智作台-历史对话.json");
+  const exportedHistory = JSON.parse(await readFile(await historyDownload.path(), "utf8"));
+  assert.deepEqual(exportedHistory.map(session => session.id), [newerSessionId, olderSessionId]);
+  assert.equal(exportedHistory.find(session => session.id === olderSessionId).messages.length, 4);
+  const persistedHistory = await (await context.request.get(base + "/api/workspace")).json();
+  assert.equal(persistedHistory.state.sessions.length, 2);
+  assert.equal(persistedHistory.state.tasks.length, 3, "Navigation changes must retain the original request records");
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
+  assert.equal(await historyLinks.count(), 2);
+
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
   assert.equal(await page.locator("#sidebar .profile").count(), 0);
@@ -224,16 +286,33 @@ try {
     });
     assert.ok(await page.locator("#sidebar").evaluate(element => {
       const settings = element.querySelector(".sidebar-settings").getBoundingClientRect();
-      const note = element.querySelector(".local-card").getBoundingClientRect();
-      return settings.top >= note.bottom && settings.bottom <= innerHeight + 1;
-    }), "Settings must occupy the bottom slot below the sidebar note");
+      const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
+      const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
+      return !element.querySelector(".local-card") && settings.bottom <= innerHeight + 1 && settings.bottom >= innerHeight - 35 && start.bottom <= home.top;
+    }), "Settings must remain at the bottom and new conversation above Home");
     assert.equal(await page.locator("#sidebar a").last().getAttribute("href"), "#settings");
-    await page.screenshot({ path: path.join(output, "settings-menu-mobile-" + width + ".png") });
+    await page.screenshot({ path: path.join(output, "navigation-menu-mobile-" + width + ".png") });
     await page.locator('#sidebar a[href="#settings"]').click();
     await page.getByRole("heading", { name: "账号管理", exact: true }).waitFor();
     await page.getByRole("heading", { name: "我的工作空间", exact: true }).waitFor();
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Settings must fit mobile width");
     await page.screenshot({ path: path.join(output, "settings-account-mobile-" + width + ".png") });
+    await page.goto(base + "/#home");
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
+    await assertNavigation();
+    await page.locator("#sidebar .sidebar-new-chat").click();
+    await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
+    assert.equal(await page.locator("#message-input").inputValue(), "");
+    assert.equal(await page.locator("body").evaluate(element => element.classList.contains("sidebar-open")), false);
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
+    await page.locator('#sidebar a[href="#tasks"]').click();
+    await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
+    assert.equal(await historyLinks.count(), 2);
+    assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "History must fit mobile width");
+    await page.screenshot({ path: path.join(output, "navigation-history-mobile-" + width + ".png") });
+
   }
   await page.setViewportSize({ width: 1440, height: 960 });
   await logout();
@@ -250,7 +329,7 @@ try {
     await page.getByRole("button", { name: "去登录", exact: true }).click();
   }
   assert.deepEqual(errors, []);
-  console.log("Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
+  console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {
   if (browser) await browser.close();
   if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill(); await stopped; }

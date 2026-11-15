@@ -393,7 +393,7 @@ export function searchWorkspace(state, query) {
         kind: "session",
         id: s.id,
         title: s.title,
-        label: "历史会话",
+        label: "历史对话",
       })),
     ...state.documents
       .filter((d) => contains(d.name, d.tag, d.content))
@@ -409,7 +409,7 @@ export function searchWorkspace(state, query) {
         kind: "task",
         id: t.id,
         title: t.title,
-        label: t.status === 'demo' ? "任务记录 · 历史演示" : "任务记录 · 模型对话",
+        label: t.status === 'demo' ? "对话请求 · 历史演示" : "对话请求 · 模型对话",
       })),
   ].slice(0, 30);
 }
