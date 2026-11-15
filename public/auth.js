@@ -67,9 +67,12 @@ const socialIcons = {
 const thirdParty = () => `<div class="auth-other"><p class="auth-divider">其他登录方式</p><div class="auth-socials">${[["wechat", "微信"], ["google", "Google"], ["apple", "Apple"]].map(([key, name]) => `<button type="button" class="auth-social" aria-label="${name}登录（暂未开通）" title="${name}登录暂未开通" disabled>${socialIcons[key]}</button>`).join("")}</div><p class="auth-social-note">第三方登录暂未开通</p></div>`;
 
 export class AuthDialog {
-  constructor({ request, onAuthenticated }) {
+  constructor({ request, onAuthenticated, onCancel }) {
     this.request = request;
     this.onAuthenticated = onAuthenticated;
+    this.onCancel = onCancel;
+    this.cancellable = false;
+    this.switchingAccount = false;
     const remembered = readRemembered();
     this.method = remembered?.method || "account";
     this.registration = false;
@@ -82,11 +85,12 @@ export class AuthDialog {
     this.element = document.createElement("dialog");
     this.element.className = "server-access";
     this.element.setAttribute("aria-labelledby", "auth-title");
-    this.element.addEventListener("cancel", event => event.preventDefault());
+    this.element.addEventListener("cancel", event => { event.preventDefault(); this.cancel(); });
     this.element.addEventListener("click", event => {
       const target = event.target.closest("[data-auth]");
       if (!target || this.busy) return;
       const action = target.dataset.auth;
+      if (action === "cancel") { this.cancel(); return; }
       if (action === "method") this.switchMethod(target.dataset.method);
       if (["register", "login", "recover"].includes(action)) {
         this.capture();
@@ -115,7 +119,16 @@ export class AuthDialog {
     });
     document.body.append(this.element);
   }
-  open({ register = false, legacyAccount = "", smsEnabled = false } = {}) {
+  open({ register = false, legacyAccount = "", smsEnabled = false, switchAccount = false, cancellable = false } = {}) {
+    this.cancelState = switchAccount ? { method: this.method, remember: this.remember, drafts: { ...this.drafts }, registrationDrafts: { ...this.registrationDrafts } } : null;
+    this.switchingAccount = switchAccount;
+    this.cancellable = cancellable;
+    if (switchAccount) {
+      this.method = "account";
+      this.drafts = {};
+      this.registrationDrafts = {};
+      this.remember = false;
+    }
     this.registration = register;
     this.recovery = false;
     this.smsEnabled = smsEnabled;
@@ -128,6 +141,15 @@ export class AuthDialog {
     if (this.element.open) this.element.close();
     clearInterval(this.codeTimer);
     this.remaining = 0;
+    this.cancellable = false;
+    this.switchingAccount = false;
+    this.cancelState = null;
+  }
+  cancel() {
+    if (!this.cancellable || this.busy) return;
+    if (this.cancelState) Object.assign(this, this.cancelState);
+    this.close();
+    this.onCancel?.();
   }
   capture() {
     const form = this.element.querySelector("form");
@@ -167,7 +189,7 @@ export class AuthDialog {
   frame(content, mode) {
     return `<div class="auth-layout auth-${mode}">${this.story(mode)}<section class="auth-panel">
       <div class="auth-mobile-brand"><span class="auth-logo">智</span><span>智作台</span></div>
-      ${content}<p class="auth-panel-footer">智作台 · 让每一个好想法，有处安放。</p>
+      ${content}${this.cancellable ? '<p class="auth-cancel-return"><button type="button" class="auth-text-link" data-auth="cancel">返回当前账号</button></p>' : ""}<p class="auth-panel-footer">智作台 · 让每一个好想法，有处安放。</p>
     </section></div>`;
   }
   render() {
@@ -193,7 +215,7 @@ export class AuthDialog {
       fields = this.method === "email" ? this.field("email", "邮箱", "请输入邮箱地址", "email", "mail") + password()
         : this.field("account", "账号", "请输入账号", "text", "user") + password();
     }
-    const heading = `<header class="auth-heading"><h1 id="auth-title">${register ? "创建你的账号" : this.method === "sms" ? "验证码登录" : "欢迎登录"}</h1><p>${register ? "加入智作台，让好想法从这里开始。" : this.method === "sms" ? "通过手机验证码，便捷登录工作空间。" : "登录你的账号，开启更有序的创作。"}</p></header>`;
+    const heading = `<header class="auth-heading"><h1 id="auth-title">${register ? "创建你的账号" : this.switchingAccount ? "登录其他账号" : this.method === "sms" ? "验证码登录" : "欢迎登录"}</h1><p>${register ? "加入智作台，让好想法从这里开始。" : this.switchingAccount ? "登录成功后，将切换到该账号的工作空间。" : this.method === "sms" ? "通过手机验证码，便捷登录工作空间。" : "登录你的账号，开启更有序的创作。"}</p></header>`;
     const tabs = register ? "" : `<div class="auth-tabs" role="tablist" aria-label="登录方式">${methods.map(([key, label]) => `<button type="button" role="tab" id="auth-tab-${key}" aria-controls="auth-form" aria-selected="${this.method === key}" tabindex="${this.method === key ? 0 : -1}" data-auth="method" data-method="${key}">${label}</button>`).join("")}</div>`;
     const options = register ? '<p class="auth-register-note">请使用常用邮箱，并妥善保管你的账号和密码。</p>'
       : this.method === "sms" ? (this.smsEnabled ? "" : '<p class="auth-method-note">验证码登录暂未开通，可使用账号或邮箱密码登录。</p>')
@@ -262,7 +284,7 @@ export class AuthDialog {
           } else localStorage.removeItem(rememberedKey);
         } catch {}
       }
-      if (registration) this.registrationDrafts = {};
+      if (registration || this.cancellable) this.registrationDrafts = {};
       form.reset();
       await this.onAuthenticated();
     } catch (error) { this.error(this.friendly(error)); }

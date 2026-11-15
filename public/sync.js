@@ -3,18 +3,19 @@ import { AuthDialog } from "./auth.js";
 
 export class WorkspaceSync {
   constructor(callbacks) {
-    Object.assign(this, { callbacks, mode: "connecting", authenticated: false, revision: 0, sequence: 0, version: "", pending: null, conflict: null, busy: false, authCycle: 0, label: "正在连接" });
+    Object.assign(this, { callbacks, mode: "connecting", authenticated: false, revision: 0, sequence: 0, version: "", pending: null, conflict: null, busy: false, authCycle: 0, switchingAccount: false, accountActionBusy: false, label: "正在连接" });
     this.accountDrafts = new Map();
-    this.auth = new AuthDialog({ request: (...args) => this.request(...args), onAuthenticated: () => this.connect() });
+    this.auth = new AuthDialog({ request: (...args) => this.request(...args), onAuthenticated: () => this.connect(), onCancel: () => this.cancelAccountLogin() });
     this.dialog = this.auth.element;
     document.body.classList.add("server-locked");
-    window.addEventListener("online", () => this.connect());
+    window.addEventListener("online", () => { if (!this.switchingAccount) this.connect(); });
     window.addEventListener("beforeunload", event => {
       if (this.pending || this.accountDrafts.size) { event.preventDefault(); event.returnValue = ""; }
     });
     document.addEventListener("click", event => {
       const action = event.target.closest("[data-sync]")?.dataset.sync;
       if (action === "retry") this.connect();
+      if (action === "add-account") this.addAccount().catch(error => this.callbacks.onNotice?.(error.message, true));
       if (action === "logout") this.logout().catch(error => this.callbacks.onNotice?.(error.message, true));
       if (action === "reload") location.reload();
       if (action === "use-server") this.resolveConflict(false);
@@ -42,8 +43,9 @@ export class WorkspaceSync {
     document.body.classList.add("server-locked");
     this.auth.open({ register: setup, legacyAccount: this.lastStatus?.legacyAccount, smsEnabled: this.lastStatus?.authMethods?.sms });
   }
-  unlock() { document.body.classList.remove("server-locked"); this.auth.close(); }
+  unlock() { this.switchingAccount = false; document.body.classList.remove("server-locked"); this.auth.close(); }
   lock() {
+    this.switchingAccount = false;
     this.authCycle++;
     this.authenticated = false;
     clearInterval(this.timer);
@@ -174,7 +176,7 @@ export class WorkspaceSync {
     }
   }
   async poll() {
-    if (!this.authenticated || this.busy || this.pending || this.conflict) return;
+    if (!this.authenticated || this.busy || this.pending || this.conflict || this.switchingAccount || this.accountActionBusy) return;
     this.busy = true;
     const cycle = this.authCycle;
     try {
@@ -212,15 +214,44 @@ export class WorkspaceSync {
     this.conflict = null;
     if (useLocal) { this.cachePending(); this.flush(); } else this.status("已载入最新版本，冲突内容已在浏览器备份");
   }
-  async logout() {
-    if (this.pending) { this.callbacks.onNotice?.("还有未同步修改，请等待保存完成或先处理冲突。", true); return; }
-    this.authCycle++;
-    await this.request("/api/logout", { method: "POST" });
-    this.authenticated = false;
+  canChangeAccount(action) {
+    if (this.switchingAccount || this.accountActionBusy) return false;
+    if (this.mode !== "server" || !this.authenticated) { this.callbacks.onNotice?.("请先连接并登录工作台。", true); return false; }
+    if (this.pending || this.conflict) { this.callbacks.onNotice?.("还有未同步修改，请等待保存完成或先处理冲突。", true); return false; }
+    if (this.busy || this.connecting) { this.callbacks.onNotice?.("正在同步账号数据，请稍后重试。", true); return false; }
+    if (this.callbacks.canChangeAccount?.(action) === false) {
+      this.callbacks.onNotice?.(action === "add-account" ? "还有未发送内容或正在进行的对话，请先完成后再添加账号。" : "还有未发送内容，请先保存或清空后再退出账号。", true);
+      return false;
+    }
+    return true;
+  }
+  async addAccount() {
+    if (!this.canChangeAccount("add-account")) return;
+    this.switchingAccount = true;
     clearInterval(this.timer);
     document.body.classList.add("server-locked");
-    this.callbacks.onSignedOut?.();
-    this.showLogin(false);
-    this.status("已退出账号");
+    this.auth.open({ smsEnabled: this.lastStatus?.authMethods?.sms, switchAccount: true, cancellable: true });
+  }
+  async cancelAccountLogin() {
+    if (!this.switchingAccount) return;
+    this.switchingAccount = false;
+    await this.connect();
+  }
+  async logout() {
+    if (!this.canChangeAccount("logout")) return;
+    this.accountActionBusy = true;
+    clearInterval(this.timer);
+    this.authCycle++;
+    try {
+      await this.request("/api/logout", { method: "POST" });
+      this.authenticated = false;
+      document.body.classList.add("server-locked");
+      this.callbacks.onSignedOut?.();
+      this.showLogin(false);
+      this.status("已退出账号");
+    } catch (error) {
+      if (this.authenticated) this.timer = setInterval(() => this.poll(), 8000);
+      throw error;
+    } finally { this.accountActionBusy = false; }
   }
 }

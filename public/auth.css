@@ -136,3 +136,5 @@
 @media (prefers-reduced-motion: reduce) {
   .server-access *, .server-access *::before, .server-access *::after { transition: none !important; }
 }
+
+.auth-cancel-return { margin: 16px 0 0; text-align: center; font-size: 12px; line-height: 1.8; }

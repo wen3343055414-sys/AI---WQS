@@ -162,8 +162,10 @@ function modelPrivacy() {
 async function refreshModelConfig(force = false) {
   if (!sync?.authenticated || modelConfigPending || (!force && Date.now() - modelConfigChecked < 5000)) return;
   modelConfigPending = true;
+  const accountCycle = chatAccountCycle;
   try {
     const value = await sync.request('/api/model-config');
+    if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
     modelConfig = value;
     if (changed && !chatPending && !dialog.open && !document.activeElement?.matches('input,textarea,select')) render();
@@ -173,8 +175,8 @@ async function refreshModelConfig(force = false) {
     if (changed && !chatPending) document.querySelectorAll('[data-setting="modelKey"]').forEach(select => { if (document.activeElement !== select) select.innerHTML = aiModelOptions(); });
     const send = document.querySelector('#message-form button[type=submit]');
     if (send) send.disabled = Boolean(chatPending || !current.ready);
-  } catch { modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
-  finally { modelConfigChecked = Date.now(); modelConfigPending = false; }
+  } catch { if (accountCycle === chatAccountCycle) modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
+  finally { if (accountCycle === chatAccountCycle) { modelConfigChecked = Date.now(); modelConfigPending = false; } }
 }
 function chatRequestNotice(session) {
   if (!session) return '';
@@ -326,7 +328,7 @@ function homePage() {
   <div class="quick-grid">${STARTERS.map((s) => `<button class="quick-card" data-action="starter" data-id="${s.id}"><span class="tile-icon tone-${s.tone}">${icon(s.icon)}</span><strong>${s.title}</strong><small>${s.subtitle}</small></button>`).join("")}</div>
   <div class="dashboard-lower"><div>${section("常用提示词", "收藏好方法，下次直接用", '<a class="btn btn-quiet" href="#prompts">查看全部 ' + icon("arrow") + "</a>")}<div class="prompt-grid">${favorites.length ? favorites.map(promptCard).join("") : empty("star", "把好用的提示词收藏在这里", "去提示词库点亮星标，建立你的常用清单。", '<a class="btn" href="#prompts">浏览提示词库</a>')}</div>
   ${section("最近任务", "每一份思考，都有迹可循", '<a class="btn btn-quiet" href="#tasks">全部记录 ' + icon("arrow") + "</a>")}${taskTable(state.tasks.slice(0, 3))}</div>
-  <aside class="side-panel"><div class="note-card"><span class="eyebrow">${icon("bulb")}灵感便签 / 01</span><h3>好的回答，<br>从好的提问开始。</h3><p>给 AI 一个角色、一点背景，<br>再告诉它你期待的结果。</p><div class="mini-example">“你是一位内容编辑，请面向初学者，用一个例子解释这个概念。”</div>${button("prompt-guide", `看看怎么提问 ${icon("arrow")}`, "", "btn btn-quiet")}</div><div class="workspace-stats"><h3>我的工作空间</h3><div class="stat-line"><span>收藏提示词</span><b>${state.prompts.filter((p) => p.favorite).length}</b></div><div class="stat-line"><span>知识资料</span><b>${state.documents.length}</b></div><div class="stat-line"><span>累计对话</span><b>${state.sessions.length}</b></div></div></aside></div>`;
+  <aside class="side-panel"><div class="note-card"><span class="eyebrow">${icon("bulb")}灵感便签 / 01</span><h3>好的回答，<br>从好的提问开始。</h3><p>给 AI 一个角色、一点背景，<br>再告诉它你期待的结果。</p><div class="mini-example">“你是一位内容编辑，请面向初学者，用一个例子解释这个概念。”</div>${button("prompt-guide", `看看怎么提问 ${icon("arrow")}`, "", "btn btn-quiet")}</div></aside></div>`;
 }
 function promptResults() {
   const list = state.prompts.filter(
@@ -460,8 +462,8 @@ function chatPage() {
 }
 function settingsPage() {
   return (
-    heading("设置", "按你的习惯，整理这片工作空间。") +
-    `<div class="settings-grid"><div>${serverSettings()}<section class="settings-card"><h2>${icon("sun")}外观与偏好</h2><p>让工作台呈现你喜欢的样子。</p><div class="setting-row"><div><strong>界面主题</strong><small>跟随系统或选择固定主题</small></div><div class="segmented" role="group" aria-label="界面主题">${[
+    heading("设置", "管理你的账号、工作空间与使用偏好。") +
+    `<div class="settings-grid">${accountSettings()}${workspaceSettings()}<div>${serverSettings()}<section class="settings-card"><h2>${icon("sun")}外观与偏好</h2><p>让工作台呈现你喜欢的样子。</p><div class="setting-row"><div><strong>界面主题</strong><small>跟随系统或选择固定主题</small></div><div class="segmented" role="group" aria-label="界面主题">${[
       ["light", "浅色"],
       ["dark", "深色"],
       ["system", "系统"],
@@ -480,8 +482,35 @@ function settingsPage() {
       )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(activeModel().ready ? activeModel().model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用小贴士</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、会话、资料正文和任务。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
   );
 }
+function accountSettings() {
+  const user = sync?.authenticated ? sync.user : null;
+  const enabled = sync?.mode === "server" && Boolean(user);
+  const account = user?.account || (sync?.mode === "local" ? "浏览器模式" : "未登录");
+  return `<section class="settings-card account-settings" data-account-management aria-labelledby="account-settings-title">
+    <h2 id="account-settings-title">${icon("shield")}账号管理</h2>
+    <p>${enabled ? "管理当前登录账号，或登录其他账号进入独立工作空间。" : "连接并登录工作台后，可在这里管理账号。"}</p>
+    <div class="account-summary"><span class="account-avatar" aria-hidden="true">${e(user?.account?.slice(0, 1).toUpperCase() || "我")}</span>
+      <div class="account-identity"><strong data-current-account>${e(account)}</strong><small data-current-email>${e(user?.email || (enabled ? "未设置邮箱" : "尚未连接账号"))}</small></div>
+      ${enabled ? '<span class="account-current-badge">当前账号</span>' : ""}
+    </div>
+    <div class="settings-actions"><button type="button" class="btn btn-primary" data-sync="add-account" ${enabled ? "" : "disabled"}>${icon("plus")}添加其他账号登录</button><button type="button" class="btn" data-sync="logout" ${enabled ? "" : "disabled"}>退出当前账号</button></div>
+    <p class="account-help">各账号的内容独立保存，切换账号后可继续访问原有数据。</p>
+  </section>`;
+}
+function workspaceSettings() {
+  return `<section class="settings-card settings-workspace" data-settings-workspace aria-labelledby="workspace-settings-title">
+    <h2 id="workspace-settings-title">${icon("layers")}我的工作空间</h2>
+    <p>${sync?.mode === "server" ? "当前账号的创作与资料概览。" : "当前浏览器中保存的创作与资料概览。"}</p>
+    <div class="settings-workspace-stats">
+      <div><strong>${state.prompts.filter(p => p.favorite).length}</strong><span>收藏提示词</span></div>
+      <div><strong>${state.documents.length}</strong><span>知识资料</span></div>
+      <div><strong>${state.sessions.length}</strong><span>累计对话</span></div>
+    </div>
+    <p class="workspace-settings-note">数据导出、备份与恢复可在下方“本地数据”中管理。</p>
+  </section>`;
+}
 function serverSettings() {
-  return `<section class="settings-card"><h2>${icon("shield")}本机服务器</h2><p>${sync?.mode === "server" ? "会话、提示词、资料与设置由本机数据库统一保存，其他已登录页面会自动同步。" : "静态部署使用浏览器保存。运行本机 Docker 服务后可启用数据库与自动同步。"}</p><div class="connection-state"><span>保存状态</span><strong data-server-label>${e(sync?.label || "正在连接")}</strong></div><div class="connection-state"><span>运行版本</span><strong data-server-version>${e(sync?.version?.slice(0, 12) || "静态演示版")}</strong></div><div class="settings-actions"><button type="button" class="btn" data-sync="retry">重新连接</button>${sync?.mode === "server" ? '<button type="button" class="btn" data-sync="logout">退出登录</button>' : ''}</div></section>`;
+  return `<section class="settings-card"><h2>${icon("shield")}本机服务器</h2><p>${sync?.mode === "server" ? "会话、提示词、资料与设置由本机数据库统一保存，其他已登录页面会自动同步。" : "静态部署使用浏览器保存。运行本机 Docker 服务后可启用数据库与自动同步。"}</p><div class="connection-state"><span>保存状态</span><strong data-server-label>${e(sync?.label || "正在连接")}</strong></div><div class="connection-state"><span>运行版本</span><strong data-server-version>${e(sync?.version?.slice(0, 12) || "静态演示版")}</strong></div><div class="settings-actions"><button type="button" class="btn" data-sync="retry">重新连接</button></div></section>`;
 }
 function render() {
   const textarea = document.querySelector("#message-input");
@@ -499,7 +528,7 @@ function render() {
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><a class="nav-link ${page === "settings" ? "active" : ""}" href="#settings" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}设置</a><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><a href="#settings" class="profile"><span class="avatar">我</span><span><strong>我的工作空间</strong><small>真实模型服务</small></span>${icon("chevron")}</a></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><div class="local-card"><strong>${icon("shield")}灵感在这里，安心留下</strong><p>${sync?.mode === "server" ? "数据保存在本机服务器。<br>已登录的页面自动同步。" : "内容仅保存在当前浏览器。<br>你的工作空间，由你掌握。"}</p></div><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置<small>账号、工作空间与偏好</small></span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span>${iconButton("help", "使用帮助", "help")}${button("new", "新建", "plus", "btn btn-primary")}</div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, prompts: promptsPage, knowledge: knowledgePage, tasks: tasksPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
   // The menu button needs one class attribute to remain available on small screens.
   document.querySelector("[data-menu-button]").classList.add("mobile-menu");
   document.querySelector("#sidebar").inert = mobile.matches;
@@ -1193,6 +1222,9 @@ if (initial.warning) toast(initial.warning, true);
 function clearAccountView() {
   chatAccountCycle++;
   chatPending = null;
+  modelConfigPending = false;
+  modelConfigChecked = 0;
+  modelConfig = { ready: false, model: '', provider: '', message: '请登录后查看模型配置。' };
   if (dialog.open) closeDialog();
   dialog.innerHTML = "";
   state = createInitialState();
@@ -1211,6 +1243,7 @@ sync = new WorkspaceSync({
     render();
   },
   onNotice: toast,
+  canChangeAccount: action => !dialog.open && ![...drafts.values()].some(value => value.trim()) && (action !== "add-account" || !chatPending),
   onStatus() { refreshModelConfig(); },
   canApply: () => !chatPending && !dialog.open && !document.activeElement?.matches("input, textarea, select"),
   canReload: () => !chatPending && !dialog.open && ![...drafts.values()].some(value => value.trim()) && !document.activeElement?.matches("input, textarea, select"),

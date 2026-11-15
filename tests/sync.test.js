@@ -5,7 +5,7 @@ import { createInitialState } from "../public/core.js";
 
 function client() {
   const sync = Object.create(WorkspaceSync.prototype);
-  Object.assign(sync, { authenticated: true, busy: false, revision: 3, sequence: 1, conflict: null, pending: createInitialState(), callbacks: {}, serverId: "test" });
+  Object.assign(sync, { authenticated: true, mode: "server", authCycle: 0, busy: false, revision: 3, sequence: 1, conflict: null, pending: createInitialState(), callbacks: {}, serverId: "test" });
   sync.status = () => {};
   sync.cachePending = () => {};
   return sync;
@@ -55,4 +55,34 @@ test("待发送缓存按账号隔离，保存请求携带账号绑定", async t 
   globalThis.localStorage = { removeItem() {} };
   try { await alice.flush(); } finally { globalThis.localStorage = original; }
   assert.equal(body.userId, 1);
+});
+
+test("账号管理不会丢弃未同步修改或提前退出当前会话", async () => {
+  const sync = client();
+  const pending = sync.pending;
+  const notices = [];
+  let calls = 0;
+  sync.callbacks.onNotice = message => notices.push(message);
+  sync.request = async () => { calls++; return {}; };
+  sync.auth = { open() { calls++; } };
+  await sync.addAccount();
+  await sync.logout();
+  assert.equal(calls, 0);
+  assert.equal(sync.authenticated, true);
+  assert.equal(sync.pending, pending);
+  assert.equal(notices.length, 2);
+  assert.ok(notices.every(message => message.includes("未同步")));
+});
+
+test("退出请求失败时保留当前账号并恢复同步", async t => {
+  const sync = client();
+  sync.pending = null;
+  sync.user = { id: 1, account: "fixture-owner" };
+  sync.request = async () => { throw new Error("offline"); };
+  t.after(() => clearInterval(sync.timer));
+  await assert.rejects(sync.logout(), /offline/);
+  assert.equal(sync.authenticated, true);
+  assert.equal(sync.user.account, "fixture-owner");
+  assert.equal(sync.accountActionBusy, false);
+  assert.ok(sync.timer);
 });
