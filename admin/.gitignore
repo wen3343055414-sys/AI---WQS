@@ -1,0 +1,5 @@
+data/
+*.log
+*.log.1
+scheduled-task.xml
+config.json

@@ -2,25 +2,26 @@
 
 把会话、提示词、知识资料和任务放在同一个工作空间。智作台提供中文界面、账号登录、SQLite 数据保存，以及从 GitHub 到本机 Docker 的自动更新流程。
 
-> 本页对应主分支 **`main`**：账号注册、账号／邮箱密码登录和数据后端已实现；**AI 对话仍为明确标注的演示消息，尚未调用模型 API**。安装和体验此版本无需 API 密钥。Windows 管理端与真实模型接入见下方开发分支说明。
+> 本页对应完整发布分支 **`main`**：账号注册、账号／邮箱密码登录、数据后端和独立 Windows 服务端统一维护。配置可用模型接口后，工作台发送真实文本对话并统计 Token；已有演示历史保留标记。仅安装和浏览工作台不需要 API 密钥。
 
 ## 功能概览
 
 | 功能 | 当前主分支支持 |
 | --- | --- |
-| 会话与任务 | 多轮演示对话、历史会话、复制与导出、关联任务记录；任务记录表示输入已保存 |
+| 会话与任务 | 真实模型文本对话（需配置独立服务端）、历史会话、复制与导出、请求结果、重试和任务记录 |
 | 提示词 | 模板浏览、编辑、分类与收藏，常用提示词显示在首页 |
 | 知识资料 | 添加资料、阅读 UTF-8 文本、搜索正文、将资料带入对话输入框 |
 | 全局搜索 | 搜索提示词、会话、资料与任务，支持 `Ctrl / ⌘ + K` |
 | 账号与工作空间 | 注册、账号或邮箱密码登录，每个账号使用独立工作空间，兼容旧版密码用户 |
 | 数据与同步 | SQLite 持久保存、自动保存、同账号跨页面同步、冲突处理和 JSON 导入导出 |
 | 界面与运维 | 深色主题、手机布局、同步状态、运行版本、数据库备份与代码回退 |
+| 模型与服务端 | 多服务商、多模型选择、独立加密密钥、实际 Token 用量、月限额、服务启停、日志及局域网入口 |
 
 ## 快速开始（Linux）
 
 ### 1. 准备环境
 
-安装 Git、Python 3 和 Docker Desktop for Linux，打开 Docker Desktop 并等待引擎就绪。自动更新还需要可用的 `systemd` 用户服务。以日常使用 Docker Desktop 的用户运行安装命令；Node.js 由容器提供，无需在本机单独安装。
+安装 Git、Python 3 和 Docker Desktop for Linux（Compose 2.33.1+），打开 Docker Desktop 并等待引擎就绪。自动更新还需要可用的 `systemd` 用户服务。以日常使用 Docker Desktop 的用户运行安装命令；Node.js 由容器提供，无需在本机单独安装。项目显式使用 IPv4 容器网络，匹配后端和 Windows 模型桥接；不修改 Docker Desktop 全局网络设置。
 
 ### 2. 安装主分支
 
@@ -59,19 +60,21 @@ GitHub 保存应用代码和公开开发摘要。密码、数据库、业务内�
 
 ```mermaid
 flowchart LR
-    Dev[GPT / Codex 修改代码] --> Push[提交到本机跟随的 GitHub 分支]
+    Dev[GPT / Codex 任务分支开发] --> Push[经 PR 审阅合入 main]
     Push --> CI[同一提交的 push CI 验收成功]
     CI --> Timer[本机定时器检查更新]
     Timer --> Deploy[备份并更新 Docker 服务]
     Deploy --> Front[Nginx 前端]
     Front <--> Back[Node.js 后端]
     Back <--> DB[(SQLite 持久卷)]
+    Deploy --> Admin[Windows 独立服务端]
+    Back <--> Admin
 ```
 
-- **代码更新**：本机只跟随安装时指定的分支，定时器每次任务结束约一分钟后再次检查。任务分支的修改需经审阅合入跟随分支，才会进入该安装的更新流程。
+- **代码更新**：本机发布跟随 `main`，约每分钟检查。任务分支的修改需经 PR 合入 `main`，并通过该 SHA 的 push CI，才会进入更新流程；还需构建和健康检查时间，不保证提交后立即上线。
 - **数据同步**：页面自动保存修改，其他已登录页面约每 8 秒检查更新。离线修改保留待发送缓存，恢复连接后重试；发生并发冲突时保留本页内容并提示选择。
 - **版本切换**：没有未完成输入时，浏览器自动刷新到新版本；正在编辑时保留输入并提示刷新。
-- **备份与回退**：升级前及运行期间每天备份数据库，保留最近 30 份。新版启动失败时恢复上一代码版本；代码回退保留当前业务数据，不恢复过去的业务内容。
+- **备份与回退**：工作空间数据库升级前及每天备份，保留最近 30 份；Windows 管理数据库在升级前另建快照。新版启动失败时恢复上一代码版本，保留当前业务数据。
 
 自动更新需要本机已完成安装、电脑开机、Docker 引擎运行且能够访问 GitHub。Docker Desktop 依赖用户登录会话；休眠、断电或退出登录期间不保证持续服务。云端提交代码后，由本机定时器执行部署。
 
@@ -111,6 +114,7 @@ npm start             # http://127.0.0.1:3000，数据库默认在 ./data
 ```bash
 npm test
 python3 -m unittest discover -s tests -p 'test_*.py'
+node scripts/check-source.mjs
 npm run build
 docker compose config --quiet
 ```
@@ -123,21 +127,23 @@ docker --context desktop-linux compose -f compose.yaml -f compose.dev.yaml up --
 
 GitHub CI 验证应用、Python 更新器规则、前后端容器 HTTP 行为及登录界面。`GET /api/health` 用于健康检查，`GET /api/status` 提供版本与登录状态，工作空间接口需要登录。
 
+Windows 运行 `python -m unittest discover -s tests -p 'test_windows_*.py'`，另运行 `python -m unittest discover -s admin/tests -p 'test_*.py'`；Windows 密钥测试可通过 `AI_WQS_TEST_PYTHON` 指定实际 Python 路径。
+
 ## 静态部署
 
 `npm run build` 生成 `dist/`，可用于静态托管。GitHub Pages 需先在仓库 **Settings → Pages → Source** 选择 **GitHub Actions**，再使用“部署 GitHub Pages”工作流发布构建产物。
 
-静态版本使用浏览器存储，AI 回复仍为演示；账号登录、服务器数据库和本机自动更新由后端服务提供。静态托管不会启动 Node.js、SQLite 或 Docker 服务。
+静态版本使用浏览器存储，可展示界面和保存浏览器数据。账号登录、数据库、真实模型对话和自动更新依赖后端与对应服务端；静态托管不会启动 Node.js、SQLite、Docker 或保管模型密钥。
 
 ## Windows 管理端与真实模型接入
 
-相关功能位于 [`codex/gpt-docker-github` 开发分支](https://github.com/wen3343055414-sys/AI---WQS/tree/codex/gpt-docker-github)，通过 [PR #5](https://github.com/wen3343055414-sys/AI---WQS/pull/5) 审阅，尚未合入 `main`：
+完整发布源码包含独立 Windows 管理服务，入口为 [http://127.0.0.1:3100](http://127.0.0.1:3100)，工作台入口为 [http://127.0.0.1:3000](http://127.0.0.1:3000)：
 
 - 独立 Windows 管理服务，提供服务启停、日志、备份、版本更新和局域网入口管理。
 - 多服务商与多模型设置，支持 OpenAI 兼容、Anthropic Messages 和 Gemini 原生文本协议；配置可用模型后，工作台使用真实模型对话。
 - Windows DPAPI 本机密钥保管、实际 Token 用量统计与月限额。
 
-安装与运行要求以该分支的 [服务端说明](https://github.com/wen3343055414-sys/AI---WQS/blob/codex/gpt-docker-github/admin/README.md) 和 [代码同步说明](https://github.com/wen3343055414-sys/AI---WQS/blob/codex/gpt-docker-github/docs/source-sync.md) 为准。主分支与开发分支分别演进，Linux 安装入口不包含 Windows 管理服务。
+安装与运行要求见 [服务端说明](admin/README.md) 和 [代码同步说明](docs/source-sync.md)。Linux 安装入口部署工作台前后端，Windows 管理服务依赖 DPAPI 与任务计划。原安装从 `codex/gpt-docker-github` 切换到 `main` 前，目标必须包含当前发布历史及完整服务源码；不能跳过分叉检查。
 
 ## 项目文档
 

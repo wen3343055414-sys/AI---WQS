@@ -1,0 +1,15 @@
+services:
+  backend:
+    image: ai-wqs-backend:${APP_VERSION:-local}-models-v1
+    environment:
+      MODEL_GATEWAY_URL: http://host.docker.internal:3100/internal/model
+      MODEL_BRIDGE_TOKEN_FILE: /run/zhizuotai/model-bridge-token
+    volumes:
+      - type: bind
+        source: ${MODEL_BRIDGE_TOKEN_PATH}
+        target: /run/zhizuotai/model-bridge-token
+        read_only: true
+        bind:
+          create_host_path: false
+  frontend:
+    image: ai-wqs-frontend:${APP_VERSION:-local}-models-v1

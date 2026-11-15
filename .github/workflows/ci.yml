@@ -17,10 +17,29 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm test
+      - name: Verify public source contains no runtime state
+        run: node scripts/check-source.mjs
       - name: Verify local updater rules
         run: python3 -m unittest discover -s tests -p 'test_*.py'
+      - name: Verify native admin controls
+        run: python3 -m unittest discover -s admin/tests -p 'test_*.py'
       - name: Check installer syntax
         run: bash -n scripts/install-local-server.sh scripts/start-linux.sh
+      - run: npm run build
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: npm ci
+      - run: npm test
+      - run: python -m unittest discover -s tests -p 'test_windows_*.py' -v
+      - run: python -m unittest discover -s admin/tests -p 'test_*.py' -v
       - run: npm run build
   docker:
     needs: test

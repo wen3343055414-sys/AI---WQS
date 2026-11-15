@@ -15,7 +15,7 @@
 
 ## 安装与访问
 
-本机安装 Git、Python 3 和 Docker Desktop for Linux，以日常用户打开 Docker Desktop，然后运行：
+本机安装 Git、Python 3 和 Docker Desktop for Linux（Compose 2.33.1+），以日常用户打开 Docker Desktop，然后运行：
 
 ```bash
 git clone --branch main https://github.com/wen3343055414-sys/AI---WQS.git

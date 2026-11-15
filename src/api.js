@@ -17,7 +17,7 @@ function readJson(request) {
   });
 }
 
-export function createApi(store, version) {
+export function createApi(store, version, modelClient) {
   const attempts = new Map();
   return async (request, response, pathname, json) => {
     if (!pathname.startsWith("/api/")) return false;
@@ -73,6 +73,15 @@ export function createApi(store, version) {
       }
       if (pathname === "/api/logout" && method === "POST") { store.logout(token); setSession(""); json(200, { authenticated: false }); return true; }
       if (!authenticated) throw new HttpError(401, "authentication_required", "请先登录账号。");
+      if (pathname === "/api/model-config" && method === "GET") { json(200, await modelClient.config()); return true; }
+      if (pathname === "/api/chat" && method === "POST") {
+        if (Number(request.headers['content-length']) > 600_000) throw new HttpError(413, 'chat_too_large', '对话请求过大，请新建对话。');
+        const input = await readJson(request);
+        if (Buffer.byteLength(JSON.stringify(input)) > 600_000) throw new HttpError(413, 'chat_too_large', '对话请求过大，请新建对话。');
+        if ((input.userId !== undefined && input.userId !== user.id) || (input.userId === undefined && !user.legacy)) throw new HttpError(401, "account_changed", "账号已切换，请重新登录。");
+        const { userId: _accountBinding, ...chat } = input;
+        json(200, await modelClient.chat(chat, user.legacy ? undefined : user.id)); return true;
+      }
       if (pathname === "/api/workspace" && readOnly) { json(200, { ...store.read(user.id), userId: user.id }); return true; }
       if (pathname === "/api/workspace" && method === "PUT") {
         const body = await readJson(request);

@@ -2,10 +2,12 @@ import { createServer } from "node:http";
 import { readFile } from "node:fs/promises";
 import { WorkspaceStore } from "./store.js";
 import { createApi } from "./api.js";
+import { ModelClient } from "./model-client.js";
 
 process.umask(0o077);
 const store = new WorkspaceStore(process.env.DATA_DIR || "./data");
-const api = createApi(store, process.env.APP_VERSION || "0.3.0-local");
+const runtimeVersion = (process.env.APP_VERSION || "0.3.0-local") + (process.env.MODEL_GATEWAY_URL ? '-models-v1' : '');
+const api = createApi(store, runtimeVersion, new ModelClient(store));
 
 const host = process.env.HOST ?? "127.0.0.1";
 const portValue = process.env.PORT ?? "3000";
