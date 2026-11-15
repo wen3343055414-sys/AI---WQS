@@ -135,7 +135,7 @@ try {
     assert.equal(await page.locator('#sidebar a[href="#tasks"]').innerText(), "历史对话");
     assert.ok(await page.locator("#sidebar").evaluate(element => {
       const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
-      const home = element.querySelector('a[href="#home"]').getBoundingClientRect();
+      const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
       return start.bottom <= home.top;
     }), "New conversation must appear above Home");
   };
@@ -150,7 +150,7 @@ try {
   await page.locator("#sidebar .sidebar-new-chat").click();
   await page.waitForFunction(() => document.activeElement?.id === "message-input");
   assert.equal(await page.locator("#message-input").inputValue(), "");
-  await page.locator('#sidebar a[href="#home"]').click();
+  await page.locator('#sidebar .nav-link[href="#home"]').click();
   assert.equal(await page.locator("#message-input").inputValue(), "保留首页未发送草稿");
   await page.locator("#message-input").fill("");
   await page.locator('#sidebar a[href="#tasks"]').click();
@@ -286,7 +286,7 @@ try {
     assert.ok(await page.locator("#sidebar").evaluate(element => {
       const settings = element.querySelector(".sidebar-settings").getBoundingClientRect();
       const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
-      const home = element.querySelector('a[href="#home"]').getBoundingClientRect();
+      const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
       return !element.querySelector(".local-card") && settings.bottom <= innerHeight + 1 && settings.bottom >= innerHeight - 35 && start.bottom <= home.top;
     }), "Settings must remain at the bottom and new conversation above Home");
     assert.equal(await page.locator("#sidebar a").last().getAttribute("href"), "#settings");
