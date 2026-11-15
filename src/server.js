@@ -23,6 +23,8 @@ const assets = new Map([
   ["/app.js", ["app.js", "text/javascript; charset=utf-8"]],
   ["/core.js", ["core.js", "text/javascript; charset=utf-8"]],
   ["/sync.js", ["sync.js", "text/javascript; charset=utf-8"]],
+  ["/auth.js", ["auth.js", "text/javascript; charset=utf-8"]],
+  ["/auth.css", ["auth.css", "text/css; charset=utf-8"]],
   ["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
 ]);
 

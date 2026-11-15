@@ -42,26 +42,31 @@ export class ModelClient {
     try { return await this.request('/config'); }
     catch (error) { return { ready: false, model: '', provider: '', revision: 0, timeoutSeconds: 30, message: error.message }; }
   }
-  async chat(input) {
+  async chat(input, { userId, legacy = false } = {}) {
     if (!input || typeof input.requestId !== 'string' || !/^[a-zA-Z0-9_-]{12,100}$/.test(input.requestId)) throw new HttpError(400, 'invalid_chat', '对话请求编号无效。');
     const fingerprint = createHash('sha256').update(JSON.stringify(input)).digest('hex');
-    const saved = this.store.db.prepare('SELECT fingerprint,response FROM model_replies WHERE request_id=?').get(input.requestId);
+    // Scope both persisted replies and the upstream idempotency key to the account.
+    const key = userId === undefined ? input.requestId : `user:${userId}:${input.requestId}`;
+    const bridgeInput = userId === undefined ? input : { ...input, requestId: "account_" + createHash("sha256").update(key).digest("hex") };
+    const lookup = this.store.db.prepare('SELECT fingerprint,response FROM model_replies WHERE request_id=?');
+    const saved = lookup.get(key) || (legacy ? lookup.get(input.requestId) : undefined);
     if (saved) {
       if (saved.fingerprint !== fingerprint) throw new HttpError(409, 'request_conflict', '同一请求编号不能用于不同的对话。');
       return JSON.parse(saved.response);
     }
-    const active = this.active.get(input.requestId);
+    const active = this.active.get(key);
     if (active) {
       if (active.fingerprint !== fingerprint) throw new HttpError(409, 'request_conflict', '对话请求编号冲突。');
       return active.promise;
     }
     if (this.active.size >= 2) throw new HttpError(429, 'chat_busy', '模型正在回复，请等待完成。');
-    const promise = this.request('/chat', input).then(result => {
-      this.store.db.prepare('INSERT OR IGNORE INTO model_replies VALUES (?,?,?,?)').run(input.requestId, fingerprint, Date.now(), JSON.stringify(result));
+    const promise = this.request('/chat', bridgeInput).then(reply => {
+      const result = { ...reply, requestId: input.requestId };
+      this.store.db.prepare('INSERT OR IGNORE INTO model_replies VALUES (?,?,?,?)').run(key, fingerprint, Date.now(), JSON.stringify(result));
       this.store.db.prepare('DELETE FROM model_replies WHERE created_at<?').run(Date.now() - 7 * 86400_000);
       return result;
-    }).finally(() => this.active.delete(input.requestId));
-    this.active.set(input.requestId, { fingerprint, promise });
+    }).finally(() => this.active.delete(key));
+    this.active.set(key, { fingerprint, promise });
     return promise;
   }
 }

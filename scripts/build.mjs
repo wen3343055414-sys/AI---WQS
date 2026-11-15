@@ -9,6 +9,8 @@ for (const name of [
   "app.js",
   "core.js",
   "sync.js",
+  "auth.js",
+  "auth.css",
   "favicon.svg",
 ]) {
   await cp(

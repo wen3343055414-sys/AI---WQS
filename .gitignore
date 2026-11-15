@@ -59,3 +59,4 @@ admin/config.json
 **/model-bridge-token
 *.pem
 *.key
+artifacts/

@@ -2,11 +2,12 @@ import { createServer, request as httpRequest } from 'node:http';
 import { Transform } from 'node:stream';
 
 const LOOPBACKS = new Set(['127.0.0.1', 'localhost', '[::1]']);
-const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/core.js', '/sync.js', '/favicon.svg'];
+const ASSETS = ['/', '/index.html', '/styles.css', '/app.js', '/core.js', '/sync.js', '/auth.js', '/auth.css', '/favicon.svg'];
 const ROUTES = new Map([
   ...ASSETS.map(name => [name, ['GET', 'HEAD']]),
   ['/api/health', ['GET', 'HEAD']], ['/api/status', ['GET', 'HEAD']],
-  ['/api/login', ['POST']], ['/api/logout', ['POST']],
+  ['/api/login', ['POST']], ['/api/register', ['POST']], ['/api/logout', ['POST']],
+  ['/api/sms/send', ['POST']], ['/api/login/sms', ['POST']],
   ['/api/workspace', ['GET', 'HEAD', 'PUT']], ['/api/model-config', ['GET']], ['/api/chat', ['POST']],
 ]);
 const RESPONSE_HEADERS = new Set(['content-type', 'content-length', 'content-encoding', 'cache-control',

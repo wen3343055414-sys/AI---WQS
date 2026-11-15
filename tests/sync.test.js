@@ -42,3 +42,17 @@ test("冲突时保留当前内容并停止自动覆盖", async () => {
   assert.equal(sync.conflict.revision, 4);
   assert.equal(sync.flushTimer, undefined);
 });
+
+
+test("待发送缓存按账号隔离，保存请求携带账号绑定", async t => {
+  const alice = client(), bob = client();
+  alice.user = { id: 1 }; bob.user = { id: 2 };
+  assert.notEqual(alice.pendingKey, bob.pendingKey);
+  let body;
+  alice.request = async (_, options) => { body = JSON.parse(options.body); return { revision: 4 }; };
+  t.after(() => clearTimeout(alice.flushTimer));
+  const original = globalThis.localStorage;
+  globalThis.localStorage = { removeItem() {} };
+  try { await alice.flush(); } finally { globalThis.localStorage = original; }
+  assert.equal(body.userId, 1);
+});

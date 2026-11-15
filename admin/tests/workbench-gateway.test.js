@@ -60,7 +60,7 @@ test('gateway serves the actual workbench and two independent public logins shar
   const f = await actualWorkbench(t);
   assert.equal((await request(f.base, '/api/setup', { method: 'POST', body: { password: PASSWORD }, headers: { Host: PUBLIC, Origin: `https://${PUBLIC}` } })).status, 404);
   assert.equal((await request(f.upstreamOrigin, '/api/setup', { method: 'POST', body: { password: PASSWORD } })).status, 200);
-  for (const target of ['/', '/index.html', '/styles.css', '/app.js', '/core.js', '/sync.js', '/favicon.svg']) {
+  for (const target of ['/', '/index.html', '/styles.css', '/app.js', '/core.js', '/sync.js', '/auth.js', '/auth.css', '/favicon.svg']) {
     const external = await request(f.base, target, { headers: { Host: PUBLIC } });
     const local = await request(f.upstreamOrigin, target === '/index.html' ? '/' : target);
     assert.equal(external.status, 200, target); assert.equal(external.text, local.text, target);
@@ -207,4 +207,31 @@ test('gateway enforces declared and chunked body limits and reports real upstrea
   assert.equal(unavailable.status, 502); assert.equal(unavailable.data.error, 'workbench_unavailable');
   assert.ok(!unavailable.text.includes('ECONNREFUSED')); assert.ok(!unavailable.text.includes(upstreamOrigin));
   for (const address of ['https://127.0.0.1:3000', 'http://attacker.invalid:3000', 'http://127.0.0.1:3100', 'http://127.0.0.1:3200', 'http://user:password@127.0.0.1:3000', 'http://127.0.0.1:3000/admin', 'http://127.0.0.1:3000/?url=anything']) assert.throws(() => createWorkbenchGateway({ upstreamOrigin: address }), /上游/);
+});
+
+test('gateway supports account registration, email login, isolated workspaces and explicit SMS unavailability', { timeout: 20000 }, async t => {
+  const f = await actualWorkbench(t, { secureHost: () => false });
+  assert.equal((await request(f.upstreamOrigin, '/api/setup', { method: 'POST', body: { password: PASSWORD } })).status, 200);
+  const account = await request(f.base, '/api/register', { method: 'POST', body: { account: 'gateway-bob', email: 'gateway-bob@example.test', password: PASSWORD } });
+  assert.equal(account.status, 201);
+  const bobCookie = account.headers['set-cookie'][0].split(';')[0];
+  const bob = account.data.user;
+  const snapshot = (await request(f.base, '/api/workspace', { headers: { Cookie: bobCookie } })).data;
+  snapshot.state.prompts[0].title = 'Account-scoped gateway record';
+  assert.equal((await request(f.base, '/api/workspace', { method: 'PUT', headers: { Cookie: bobCookie }, body: { state: snapshot.state, baseRevision: snapshot.revision, userId: bob.id } })).status, 200);
+  assert.equal((await request(f.base, '/api/logout', { method: 'POST', body: {}, headers: { Cookie: bobCookie } })).status, 200);
+  const email = await request(f.base, '/api/login', { method: 'POST', body: { method: 'email', email: 'gateway-bob@example.test', password: PASSWORD } });
+  assert.equal(email.status, 200);
+  const emailCookie = email.headers['set-cookie'][0].split(';')[0];
+  assert.equal((await request(f.base, '/api/workspace', { headers: { Cookie: emailCookie } })).data.state.prompts[0].title, 'Account-scoped gateway record');
+  const admin = await request(f.base, '/api/login', { method: 'POST', body: { method: 'account', account: 'admin', password: PASSWORD } });
+  assert.equal(admin.status, 200);
+  const adminCookie = admin.headers['set-cookie'][0].split(';')[0];
+  assert.notEqual((await request(f.base, '/api/workspace', { headers: { Cookie: adminCookie } })).data.state.prompts[0].title, 'Account-scoped gateway record');
+  assert.equal((await request(f.base, '/api/chat', { method: 'POST', body: { userId: bob.id, requestId: 'gateway-request-001' }, headers: { Cookie: adminCookie } })).status, 401);
+  for (const target of ['/api/sms/send', '/api/login/sms']) {
+    const result = await request(f.base, target, { method: 'POST', body: { phone: '13800000000' } });
+    assert.equal(result.status, 503); assert.equal(result.data.error, 'sms_unavailable');
+  }
+  for (const target of ['/api/register', '/api/sms/send', '/api/login/sms']) assert.equal((await request(f.base, target)).status, 405);
 });

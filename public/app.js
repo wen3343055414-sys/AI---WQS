@@ -133,7 +133,7 @@ function mutate(fn) {
 function persist(next) {
   if (!validateState(next)) throw new Error("工作空间数据格式无效，未修改已有记录。");
   if (sync?.mode === "server") {
-    if (!sync.authenticated) throw new Error("请先登录本机服务器。");
+    if (!sync.authenticated) throw new Error("请先登录账号。");
     sync.enqueue(next);
   } else {
     if (sync?.mode === "connecting") throw new Error("正在连接服务器，请稍候。");
@@ -159,11 +159,14 @@ function aiModelOptions() {
 function modelPrivacy() {
   return activeModel().ready ? `已连接 ${activeModel().provider} · 对话和所选文本将发送给模型服务，密钥由服务端保管` : activeModel().message;
 }
+let accountEpoch = 0;
 async function refreshModelConfig(force = false) {
   if (!sync?.authenticated || modelConfigPending || (!force && Date.now() - modelConfigChecked < 5000)) return;
   modelConfigPending = true;
+  const epoch = accountEpoch;
   try {
     const value = await sync.request('/api/model-config');
+    if (epoch !== accountEpoch || !sync.authenticated) return;
     const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
     modelConfig = value;
     if (changed && !chatPending && !dialog.open && !document.activeElement?.matches('input,textarea,select')) render();
@@ -173,8 +176,8 @@ async function refreshModelConfig(force = false) {
     if (changed && !chatPending) document.querySelectorAll('[data-setting="modelKey"]').forEach(select => { if (document.activeElement !== select) select.innerHTML = aiModelOptions(); });
     const send = document.querySelector('#message-form button[type=submit]');
     if (send) send.disabled = Boolean(chatPending || !current.ready);
-  } catch { modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
-  finally { modelConfigChecked = Date.now(); modelConfigPending = false; }
+  } catch { if (epoch === accountEpoch) modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
+  finally { if (epoch === accountEpoch) { modelConfigChecked = Date.now(); modelConfigPending = false; } }
 }
 function chatRequestNotice(session) {
   if (!session) return '';
@@ -184,8 +187,10 @@ function chatRequestNotice(session) {
   return `<div class="model-request-status failed" role="status"><span>${e(task.error || '上次请求结果尚未确认，可尝试恢复回复。')}</span>${button(task.status === 'pending' ? 'resume-chat' : 'retry-chat', task.status === 'pending' ? '恢复回复' : '重新请求', '', 'btn', `data-id="${task.id}"`)}</div>`;
 }
 async function sendChat(content, draftKey) {
+  const epoch = accountEpoch;
   if (chatPending) throw new Error('请等待当前回复完成。');
   await refreshModelConfig(true);
+  if (epoch !== accountEpoch) return;
   if (chatPending) throw new Error('请等待当前回复完成。');
   if (!activeModel().ready || !sync?.authenticated) throw new Error(activeModel().message || '请先登录并在服务端配置模型接口。');
   const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType, next.settings.modelKey || ''));
@@ -198,26 +203,33 @@ async function performChat(taskId) {
   if (chatPending) throw new Error('已有对话正在回复。');
   const task = state.tasks.find(item => item.id === taskId);
   if (!task) throw new Error('对话任务不存在。');
+  const epoch = accountEpoch;
+  const userId = sync.user?.id;
+  const isCurrent = () => epoch === accountEpoch && sync.authenticated && userId === sync.user?.id;
   chatPending = { taskId, sessionId: task.sessionId };
   render();
   try {
     const session = state.sessions.find(item => item.id === task.sessionId);
-    const input = { requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}) };
+    const input = { userId, requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}) };
     const until = Date.now() + 15000;
     while (sync.pending || sync.busy) {
+      if (!isCurrent()) return;
       if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
       if (!sync.authenticated || Date.now() > until) throw new Error('对话尚未保存到本机，请恢复连接后重新请求。');
       if (!sync.busy) await sync.flush();
       if (sync.pending || sync.busy) await new Promise(resolve => setTimeout(resolve, 150));
     }
+    if (!isCurrent()) return;
     const result = await sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(140000) });
+    if (!isCurrent()) return;
     mutate(next => finishChat(next, taskId, result));
     if (result.finishReason === 'length') toast('回复达到长度上限，可以发送“请继续”。');
   } catch (error) {
+    if (!isCurrent()) return;
     const message = error.name === 'TimeoutError' ? '等待回复超时，请检查服务端后重新请求。' : error.message;
     mutate(next => { const item = next.tasks.find(item => item.id === taskId); if (item) { item.status = 'failed'; item.error = message.slice(0, 500); } });
     toast(message, true);
-  } finally { chatPending = null; render(); }
+  } finally { if (epoch === accountEpoch) { chatPending = null; render(); } }
 }
 window.addEventListener('beforeunload', event => { if (chatPending) { event.preventDefault(); event.returnValue = ''; } });
 setInterval(() => { if (!document.hidden) refreshModelConfig(); }, 8000);
@@ -1183,7 +1195,24 @@ mobile.addEventListener("change", () => {
 });
 render();
 if (initial.warning) toast(initial.warning, true);
+function clearAccountView() {
+  accountEpoch++;
+  chatPending = null;
+  modelConfigPending = false;
+  modelConfigChecked = 0;
+  modelConfig = { ready: false, model: "", provider: "", message: "请登录后查看模型配置。" };
+  if (dialog.open) closeDialog();
+  dialog.innerHTML = "";
+  state = createInitialState();
+  drafts.clear();
+  promptFilter = documentFilter = taskFilter = "全部";
+  promptQuery = documentQuery = taskQuery = "";
+  app.innerHTML = "";
+  render();
+}
 sync = new WorkspaceSync({
+  onAccountChange: clearAccountView,
+  onSignedOut: clearAccountView,
   onState(next) {
     if (!validateState(next)) throw new Error("服务器数据格式异常，当前内容仍保留。");
     state = next;
