@@ -18,9 +18,9 @@
 本机安装 Git、Python 3 和 Docker Desktop for Linux，以日常用户打开 Docker Desktop，然后运行：
 
 ```bash
-git clone --branch codex/gpt-docker-github https://github.com/wen3343055414-sys/AI---WQS.git
+git clone --branch main https://github.com/wen3343055414-sys/AI---WQS.git
 cd AI---WQS
-bash scripts/install-local-server.sh --branch codex/gpt-docker-github
+bash scripts/install-local-server.sh --branch main
 ```
 
 访问 http://127.0.0.1:3000，首次注册账号与邮箱，并设置至少 10 个字符的密码。旧密码用户使用账号 admin 和原密码登录。密码以加盐哈希保存，登录会话使用 HttpOnly Cookie。
@@ -29,7 +29,9 @@ bash scripts/install-local-server.sh --branch codex/gpt-docker-github
 
 端口被占用时加 --port 3001。旧版手动 Compose 项目若占用 3000，可在 Docker Desktop 中停止旧项目，或使用新端口。
 
-上面跟随开发分支，适合继续在 GPT 中修改。代码合并后可重新安装并指定 --branch main，改为跟随主分支。仓库与 Docker 引擎需与已有安装一致。
+上面默认跟随主分支 main。其他分支的修改经审阅合入 main，并通过同一提交的 push CI 后，才会进入该安装的更新流程。开发分支的功能与安装要求以对应分支文档为准。
+
+已有安装更改跟随分支时，目标提交必须包含当前运行提交；更新器遇到回退或分叉会停止更新。重新运行安装程序时，仓库、Docker 项目与 Docker 引擎需与已有安装一致。
 
 安装文件位于：
 
