@@ -94,7 +94,7 @@ test("task lists and tool preferences survive SQLite reopen with account and rev
   try {
     store = new WorkspaceStore(directory);
     const owner = store.setup(randomBytes(18).toString("hex"));
-    const bob = store.register({ account: "feature_bob", email: "", password: randomBytes(18).toString("hex") });
+    const bob = store.register({ account: "feature_bob", email: "feature_bob@example.test", password: randomBytes(18).toString("hex") });
     const old = store.read(owner.id);
     delete old.state.todos;
     delete old.state.settings.enabledTools;
