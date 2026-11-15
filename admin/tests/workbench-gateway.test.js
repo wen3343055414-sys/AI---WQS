@@ -60,7 +60,7 @@ test('gateway serves the actual workbench and two independent public logins shar
   const f = await actualWorkbench(t);
   assert.equal((await request(f.base, '/api/setup', { method: 'POST', body: { password: PASSWORD }, headers: { Host: PUBLIC, Origin: `https://${PUBLIC}` } })).status, 404);
   assert.equal((await request(f.upstreamOrigin, '/api/setup', { method: 'POST', body: { password: PASSWORD } })).status, 200);
-  for (const target of ['/', '/index.html', '/styles.css', '/app.js', '/core.js', '/sync.js', '/favicon.svg']) {
+  for (const target of ['/', '/index.html', '/styles.css', '/app.js', '/core.js', '/sync.js', '/auth.js', '/auth.css', '/favicon.svg']) {
     const external = await request(f.base, target, { headers: { Host: PUBLIC } });
     const local = await request(f.upstreamOrigin, target === '/index.html' ? '/' : target);
     assert.equal(external.status, 200, target); assert.equal(external.text, local.text, target);
@@ -127,6 +127,25 @@ test('two independent LAN HTTP logins share the actual workspace without unusabl
   assert.equal(other.revision, saved.data.revision);
   assert.equal((await request(f.base, '/api/workspace', { method: 'PUT', body: { state: snapshot.state, baseRevision: saved.data.revision }, headers: { ...headers(second), Origin: 'http://attacker.invalid' } })).status, 403);
   assert.ok(clients.length > 0 && clients.every(address => address === '127.0.0.1'));
+});
+
+test('gateway supports account registration and email login while preserving per-account workspaces', { timeout: 20000 }, async t => {
+  const f = await actualWorkbench(t);
+  await request(f.upstreamOrigin, '/api/setup', { method: 'POST', body: { password: PASSWORD } });
+  const headers = { Host: PUBLIC, Origin: `https://${PUBLIC}`, 'Sec-Fetch-Site': 'same-origin' };
+  const registered = await request(f.base, '/api/register', { method: 'POST', headers, body: { account: 'GatewayFixture', email: 'gateway@example.test', password: PASSWORD } });
+  assert.equal(registered.status, 201);
+  assert.equal(registered.data.user.legacy, false);
+  const cookie = registered.headers['set-cookie'][0].split(';')[0];
+  assert.match(registered.headers['set-cookie'][0], /; Secure$/);
+  const workspace = await request(f.base, '/api/workspace', { headers: { ...headers, Cookie: cookie } });
+  assert.equal(workspace.status, 200); assert.equal(workspace.data.userId, registered.data.user.id);
+  const login = await request(f.base, '/api/login', { method: 'POST', headers, body: { method: 'email', email: 'GATEWAY@example.test', password: PASSWORD } });
+  assert.equal(login.status, 200); assert.equal(login.data.user.id, registered.data.user.id);
+  assert.equal((await request(f.base, '/api/register', { method: 'POST', headers: { ...headers, Origin: 'https://foreign.invalid' }, body: {} })).status, 403);
+  const sms = await request(f.base, '/api/sms/send', { method: 'POST', headers, body: { phone: 'fixture' } });
+  assert.equal(sms.status, 503); assert.equal(sms.data.error, 'sms_unavailable');
+  assert.equal((await request(f.base, '/api/login/sms', { method: 'POST', headers, body: { phone: 'fixture', code: 'fixture' } })).status, 503);
 });
 
 test('gateway strips unrelated credentials and unsafe response headers while preserving public origin and secure workbench cookies', async t => {

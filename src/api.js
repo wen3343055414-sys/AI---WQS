@@ -24,7 +24,8 @@ export function createApi(store, version, modelClient) {
     const method = request.method;
     const readOnly = method === "GET" || method === "HEAD";
     const token = cookieToken(request);
-    const authenticated = store.authenticated(token);
+    const user = store.sessionUser(token);
+    const authenticated = Boolean(user);
     const setSession = value => response.setHeader("Set-Cookie", `wqs_session=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${value ? 604800 : 0}${process.env.COOKIE_SECURE === "true" ? "; Secure" : ""}`);
     try {
       if (!readOnly) {
@@ -38,34 +39,54 @@ export function createApi(store, version, modelClient) {
         json(200, { status: "ok", app: "AI---WQS" }); return true;
       }
       if (pathname === "/api/status" && readOnly) {
-        json(200, { mode: "server", setupRequired: !store.hasOwner(), authenticated, version, serverId: store.instanceId() }); return true;
+        json(200, { mode: "server", setupRequired: !store.hasOwner(), authenticated, version, serverId: store.instanceId(), user, legacyAccount: store.legacyLoginHint(), authMethods: { account: true, email: true, sms: false } }); return true;
       }
-      if (["/api/setup", "/api/login"].includes(pathname) && method === "POST") {
-        const key = request.socket.remoteAddress || "local";
+      if (["/api/sms/send", "/api/login/sms"].includes(pathname) && method === "POST") {
+        await readJson(request);
+        throw new HttpError(503, "sms_unavailable", "手机验证码登录暂未开通，请使用账号或邮箱登录。");
+      }
+      if (["/api/setup", "/api/register", "/api/login"].includes(pathname) && method === "POST") {
+        const key = (request.socket.remoteAddress || "local") + (pathname === "/api/register" ? ":register" : ":login");
         const attempt = attempts.get(key);
         if (attempt?.count >= 10 && attempt.until > Date.now()) throw new HttpError(429, "rate_limited", "尝试次数过多，请 15 分钟后重试。");
         const body = await readJson(request);
-        if (pathname === "/api/setup") store.setup(body.password);
-        else if (!store.checkPassword(body.password)) {
+        let signedIn;
+        if (pathname === "/api/setup") signedIn = store.setup(body.password);
+        else if (pathname === "/api/register") {
           attempts.set(key, { count: attempt?.until > Date.now() ? attempt.count + 1 : 1, until: Date.now() + 15 * 60_000 });
-          throw new HttpError(401, "invalid_credentials", "密码不正确。");
+          signedIn = store.register(body);
+        } else {
+          if (body.method && !["account", "email"].includes(body.method)) throw new HttpError(400, "invalid_method", "请选择可用的登录方式。");
+          const loginMethod = body.method === "email" || body.email !== undefined ? "email" : "account";
+          const identifier = loginMethod === "email" ? body.email : body.account;
+          if (body.method && typeof identifier !== "string") throw new HttpError(400, "missing_identifier", "请输入账号或邮箱。");
+          signedIn = store.authenticateUser(identifier, body.password, loginMethod);
+          if (!signedIn) {
+            attempts.set(key, { count: attempt?.until > Date.now() ? attempt.count + 1 : 1, until: Date.now() + 15 * 60_000 });
+            throw new HttpError(401, "invalid_credentials", "账号或密码不正确。");
+          }
         }
-        attempts.delete(key);
-        setSession(store.createSession()); json(200, { authenticated: true }); return true;
+        if (pathname !== "/api/register") attempts.delete(key);
+        setSession(store.createSession(signedIn.id));
+        json(pathname === "/api/register" ? 201 : 200, { authenticated: true, user: signedIn });
+        return true;
       }
       if (pathname === "/api/logout" && method === "POST") { store.logout(token); setSession(""); json(200, { authenticated: false }); return true; }
-      if (!authenticated) throw new HttpError(401, "authentication_required", "请先登录本机服务器。");
+      if (!authenticated) throw new HttpError(401, "authentication_required", "请先登录账号。");
       if (pathname === "/api/model-config" && method === "GET") { json(200, await modelClient.config()); return true; }
       if (pathname === "/api/chat" && method === "POST") {
         if (Number(request.headers['content-length']) > 600_000) throw new HttpError(413, 'chat_too_large', '对话请求过大，请新建对话。');
         const input = await readJson(request);
         if (Buffer.byteLength(JSON.stringify(input)) > 600_000) throw new HttpError(413, 'chat_too_large', '对话请求过大，请新建对话。');
-        json(200, await modelClient.chat(input)); return true;
+        if ((input.userId !== undefined && input.userId !== user.id) || (input.userId === undefined && !user.legacy)) throw new HttpError(401, "account_changed", "账号已切换，请重新登录。");
+        const { userId: _accountBinding, ...chat } = input;
+        json(200, await modelClient.chat(chat, user.legacy ? undefined : user.id)); return true;
       }
-      if (pathname === "/api/workspace" && readOnly) { json(200, store.read()); return true; }
+      if (pathname === "/api/workspace" && readOnly) { json(200, { ...store.read(user.id), userId: user.id }); return true; }
       if (pathname === "/api/workspace" && method === "PUT") {
         const body = await readJson(request);
-        json(200, store.save(body.state, body.baseRevision)); return true;
+        if ((body.userId !== undefined && body.userId !== user.id) || (body.userId === undefined && !user.legacy)) throw new HttpError(401, "account_changed", "账号已切换，请重新登录。");
+        json(200, store.save(body.state, body.baseRevision, user.id)); return true;
       }
       throw new HttpError(404, "not_found", "接口不存在。");
     } catch (error) {

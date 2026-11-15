@@ -3,24 +3,24 @@
 ## 代码流程
 
 ```text
-本地 Git 工作副本 ← 拉取/推送 → GitHub codex/gpt-docker-github ← 拉取/推送 → 云端 Git 工作副本
-                                      ↓ 同一提交的 push CI 成功
-                               Windows 每分钟更新任务
-                                      ↓ 备份、构建、健康检查
-                  Docker 前端 + Docker 后端 + 独立智作台服务端
+本地 / 云端任务分支 → 验证并推送 → GitHub PR 审阅 → main
+                                                    ↓ 同一提交的 push CI 成功
+                                           Windows 每分钟更新任务
+                                                    ↓ 备份、构建、健康检查
+                                Docker 前端 + Docker 后端 + 独立智作台服务端
 ```
 
 GitHub 是版本来源。聊天是开发入口：代理把实际修改写入仓库、验证并提交推送。聊天文字、附件和未提交的代码片段不会被后台提取或自动执行。仓库 `AGENTS.md` 要求每次开发收尾提交、推送并提供 PR；没有运行中的开发任务时，代理不会自行提交文件。
 
-两端使用 `https://github.com/wen3343055414-sys/AI---WQS.git`，跟随分支为 `codex/gpt-docker-github`。开始先检查 `git status` 和分支；干净时执行：
+两端使用 `https://github.com/wen3343055414-sys/AI---WQS.git`，本机发布跟随分支为 `main`。开始先检查 `git status` 和分支；干净时更新主分支：
 
 ```bash
 git fetch origin
-git switch codex/gpt-docker-github
-git pull --ff-only origin codex/gpt-docker-github
+git switch main
+git pull --ff-only origin main
 ```
 
-有未提交改动时先检查和保留，再整合远端变化，不丢弃或强制覆盖。多个任务同时开发时使用任务分支或 worktree，经审阅合入跟随分支。其他分支没有合入前不会在本机部署。主分支通过 PR 审阅，不自动合并。
+有未提交改动时先检查和保留，再整合远端变化，不丢弃或强制覆盖。从最新 `main` 创建任务分支或 worktree 开发，完成后通过 PR 审阅。其他分支没有合入 `main` 前不会在本机部署，不自动合并主分支。
 
 ## 修改、验证与保存
 
@@ -42,9 +42,9 @@ npm run build
 python -m unittest discover -s admin/tests -p 'test_*.py'
 ```
 
-Windows 另外运行 `python -m unittest discover -s tests -p 'test_windows_*.py'`，Linux 运行所有 `test_*.py`。修改 Compose 或后端时还应验证容器 HTTP 行为。GitHub CI 包含 Linux、Windows、Docker 三部分，未通过的提交不会被本机接受。
+Windows 另外运行 `python -m unittest discover -s tests -p 'test_windows_*.py'`，Linux 运行所有 `test_*.py`。修改 Compose 或后端时还应验证容器 HTTP 行为。GitHub CI 包含 Linux、Windows、Docker 与登录浏览器验收，未通过的提交不会被本机接受。
 
-验证后记录公开工作日志，检查差异并暂存实际源代码，创建 commit，再 `git push origin codex/gpt-docker-github`。以远端 SHA 和 CI 结果确认同步，不能只看本地文件已保存。
+验证后记录公开工作日志，检查差异并暂存实际源代码，创建 commit，推送当前任务分支并创建或更新 PR。以远端 SHA 和 CI 结果确认代码保存；正式部署还需 PR 合入 `main` 后该 SHA 的 push CI 成功。
 
 ## Windows 更新与数据保留
 
@@ -68,6 +68,12 @@ Windows 另外运行 `python -m unittest discover -s tests -p 'test_windows_*.py
 ```
 
 `AI-WQS Local Server Update` 任务每分钟检查配置分支。只接受与 SHA 一致且 `.github/workflows/ci.yml` 的 **push** 工作流成功的提交；拒绝分支倒退或分叉。下载源码后先校验文件和归档路径，再构建新镜像。切换前备份工作台与管理数据库；使用原有 Docker 项目和持久卷。
+
+这是持续自动更新，检查间隔约一分钟，还需要 CI、构建及健康检查时间，不保证提交后立即上线。GitHub 不可访问、CI 失败或服务主动停止时保留当前版本，后续检查重试。
+
+项目网络显式启用 IPv4、关闭 IPv6，以匹配后端 `0.0.0.0` 监听和 Windows 模型桥接。这样新建网络不会因 Docker Desktop 的 IPv6-only 默认设置导致 Nginx 连接 IPv6 后端失败。需要 Compose 2.33.1+，参数说明见 [Docker 官方网络文档](https://docs.docker.com/reference/compose-file/networks/#enable_ipv4)。不修改主机或其他 Docker 项目的网络设置。
+
+原安装曾跟随 `codex/gpt-docker-github`。首次切换到 `main`，先整合主分支登录功能与原部署分支的独立服务端、模型及局域网管理，再通过 PR 以保留提交历史的合并方式合入；不能直接指向缺少这些源码的旧 `main`，也不绕过分叉检查。主分支精确提交 CI 成功后，备份本机配置并仅将配置的 `branch` 改为 `main`，运行原更新任务验收三个服务同一 SHA。配置、密钥及数据库不上传仓库。
 
 新版本携带 `ops/windows/release.json`，直接构建仓库源代码，不再重复应用旧模型补丁。前后端通过健康检查后更新提交指针，独立管理启动器在没有管理任务或模型请求执行时切换到该提交的 `admin/`。`AI_WQS_ADMIN_HOME` 指向稳定运行目录，配置、DPAPI 凭据、账号和统计不会搬入发布快照。由管理页面发起更新时先完成操作任务，再由启动器切换，后续定时检查完成版本确认，避免父进程等待自身任务造成死锁。
 

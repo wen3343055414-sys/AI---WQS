@@ -94,7 +94,7 @@ const initial = readState({ getItem: (key) => localStorage.getItem(key) });
 let state = initial.state;
 let sync;
 let modelConfig = { ready: false, model: '', provider: '', message: '正在读取服务端模型配置' };
-let modelConfigPending = false, modelConfigChecked = 0, chatPending = null;
+let modelConfigPending = false, modelConfigChecked = 0, chatPending = null, chatAccountCycle = 0;
 let newServerVersion = "";
 let promptFilter = "全部",
   promptQuery = "",
@@ -133,7 +133,7 @@ function mutate(fn) {
 function persist(next) {
   if (!validateState(next)) throw new Error("工作空间数据格式无效，未修改已有记录。");
   if (sync?.mode === "server") {
-    if (!sync.authenticated) throw new Error("请先登录本机服务器。");
+    if (!sync.authenticated) throw new Error("请先登录账号。");
     sync.enqueue(next);
   } else {
     if (sync?.mode === "connecting") throw new Error("正在连接服务器，请稍候。");
@@ -185,7 +185,9 @@ function chatRequestNotice(session) {
 }
 async function sendChat(content, draftKey) {
   if (chatPending) throw new Error('请等待当前回复完成。');
+  const accountCycle = chatAccountCycle;
   await refreshModelConfig(true);
+  if (accountCycle !== chatAccountCycle) return;
   if (chatPending) throw new Error('请等待当前回复完成。');
   if (!activeModel().ready || !sync?.authenticated) throw new Error(activeModel().message || '请先登录并在服务端配置模型接口。');
   const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType, next.settings.modelKey || ''));
@@ -198,26 +200,31 @@ async function performChat(taskId) {
   if (chatPending) throw new Error('已有对话正在回复。');
   const task = state.tasks.find(item => item.id === taskId);
   if (!task) throw new Error('对话任务不存在。');
+  const accountCycle = chatAccountCycle;
   chatPending = { taskId, sessionId: task.sessionId };
   render();
   try {
     const session = state.sessions.find(item => item.id === task.sessionId);
-    const input = { requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}) };
+    const input = { requestId: task.requestId, userId: sync.user?.id, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}) };
     const until = Date.now() + 15000;
     while (sync.pending || sync.busy) {
       if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
+      if (accountCycle !== chatAccountCycle) return;
       if (!sync.authenticated || Date.now() > until) throw new Error('对话尚未保存到本机，请恢复连接后重新请求。');
       if (!sync.busy) await sync.flush();
       if (sync.pending || sync.busy) await new Promise(resolve => setTimeout(resolve, 150));
     }
+    if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     const result = await sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(140000) });
+    if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     mutate(next => finishChat(next, taskId, result));
     if (result.finishReason === 'length') toast('回复达到长度上限，可以发送“请继续”。');
   } catch (error) {
+    if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     const message = error.name === 'TimeoutError' ? '等待回复超时，请检查服务端后重新请求。' : error.message;
     mutate(next => { const item = next.tasks.find(item => item.id === taskId); if (item) { item.status = 'failed'; item.error = message.slice(0, 500); } });
     toast(message, true);
-  } finally { chatPending = null; render(); }
+  } finally { if (accountCycle === chatAccountCycle) { chatPending = null; render(); } }
 }
 window.addEventListener('beforeunload', event => { if (chatPending) { event.preventDefault(); event.returnValue = ''; } });
 setInterval(() => { if (!document.hidden) refreshModelConfig(); }, 8000);
@@ -1183,7 +1190,21 @@ mobile.addEventListener("change", () => {
 });
 render();
 if (initial.warning) toast(initial.warning, true);
+function clearAccountView() {
+  chatAccountCycle++;
+  chatPending = null;
+  if (dialog.open) closeDialog();
+  dialog.innerHTML = "";
+  state = createInitialState();
+  drafts.clear();
+  promptFilter = documentFilter = taskFilter = "全部";
+  promptQuery = documentQuery = taskQuery = "";
+  app.innerHTML = "";
+  render();
+}
 sync = new WorkspaceSync({
+  onAccountChange: clearAccountView,
+  onSignedOut: clearAccountView,
   onState(next) {
     if (!validateState(next)) throw new Error("服务器数据格式异常，当前内容仍保留。");
     state = next;

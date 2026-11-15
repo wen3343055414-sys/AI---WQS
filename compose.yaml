@@ -49,3 +49,10 @@ services:
 
 volumes:
   workspace-data:
+
+# The backend and native model bridge use IPv4. Keep new project networks
+# compatible even when Docker Desktop defaults to IPv6-only networking.
+networks:
+  default:
+    enable_ipv4: true
+    enable_ipv6: false

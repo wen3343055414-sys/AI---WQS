@@ -15,21 +15,23 @@
 
 ## 安装与访问
 
-本机安装 Git、Python 3 和 Docker Desktop for Linux，以日常用户打开 Docker Desktop，然后运行：
+本机安装 Git、Python 3 和 Docker Desktop for Linux（Compose 2.33.1+），以日常用户打开 Docker Desktop，然后运行：
 
 ```bash
-git clone --branch codex/gpt-docker-github https://github.com/wen3343055414-sys/AI---WQS.git
+git clone --branch main https://github.com/wen3343055414-sys/AI---WQS.git
 cd AI---WQS
-bash scripts/install-local-server.sh --branch codex/gpt-docker-github
+bash scripts/install-local-server.sh --branch main
 ```
 
-访问 http://127.0.0.1:3000，首次设置至少 10 个字符的密码。密码以加盐哈希保存，登录会话使用 HttpOnly Cookie。
+访问 http://127.0.0.1:3000，首次注册账号与邮箱，并设置至少 10 个字符的密码。旧密码用户使用账号 admin 和原密码登录。密码以加盐哈希保存，登录会话使用 HttpOnly Cookie。
 
-默认只绑定本机。局域网访问在安装命令后加 --bind 0.0.0.0，其他设备使用本机局域网 IP 和对应端口，并输入访问密码。连接还取决于本机防火墙和局域网设置。
+默认只绑定本机。局域网访问在安装命令后加 --bind 0.0.0.0，其他设备使用本机局域网 IP 和对应端口，并登录各自账号。连接还取决于本机防火墙和局域网设置。
 
 端口被占用时加 --port 3001。旧版手动 Compose 项目若占用 3000，可在 Docker Desktop 中停止旧项目，或使用新端口。
 
-上面跟随开发分支，适合继续在 GPT 中修改。代码合并后可重新安装并指定 --branch main，改为跟随主分支。仓库与 Docker 引擎需与已有安装一致。
+上面默认跟随主分支 main。其他分支的修改经审阅合入 main，并通过同一提交的 push CI 后，才会进入该安装的更新流程。开发分支的功能与安装要求以对应分支文档为准。
+
+已有安装更改跟随分支时，目标提交必须包含当前运行提交；更新器遇到回退或分叉会停止更新。重新运行安装程序时，仓库、Docker 项目与 Docker 引擎需与已有安装一致。
 
 安装文件位于：
 
@@ -71,7 +73,7 @@ python3 ~/.local/share/ai-wqs-server/deployer.py update
 
 前端自动发送修改，未成功的内容保留在页面及可用浏览器缓存中，网络恢复后重试。冲突时选择服务器版本或保留本页内容；双方内容先在浏览器备份。
 
-首次登录空数据库，会迁入同一站点的有效旧浏览器记录。其他设备登录后读取相同工作空间。地址和浏览器不同，初次可迁入的缓存范围也不同。
+原有账号首次登录空工作空间时，会迁入同一站点的有效旧浏览器记录。其他设备登录同一账号后读取该账号的工作空间，新账号的数据彼此独立。地址和浏览器不同，初次可迁入的缓存范围也不同。
 
 TXT、Markdown、CSV、JSON 读取 UTF-8；每个文件不超过 1 MB，正文合计不超过 150 万字符，其他格式只保存元数据。每类记录最多 1,000 条，每段会话最多 2,000 条消息，单次请求最多 16 MB。模型回复仍为演示。
 
@@ -102,9 +104,12 @@ systemctl --user start ai-wqs-update.timer
 | --- | --- |
 | GET /api/health | 健康状态 |
 | GET /api/status | 实例、运行版本、初始化与登录状态 |
-| POST /api/setup | 首次设置密码 |
+| POST /api/register | 注册账号、邮箱与密码 |
+| POST /api/setup | 兼容旧版首次设置密码 |
 | POST /api/login、POST /api/logout | 登录和退出 |
 | GET /api/workspace | 读取工作空间、修订和更新时间 |
 | PUT /api/workspace | 校验并按修订保存 |
 
 工作空间接口需要登录，变更请求校验来源。数据库、配置、源码与备份不属于公开静态资源。
+
+账户迁移、邮箱登录和短信服务状态见 [账户登录](authentication.md)。

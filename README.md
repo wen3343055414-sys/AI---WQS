@@ -1,101 +1,153 @@
-# 智作台 · 本机服务器版
+# 智作台 · 中文 AI 工作台
 
-中文 AI 工作台，包含前端、数据后端、SQLite 数据库，以及独立的 Windows 管理服务。实际开发源代码统一保存在本仓库，在本地或云端完成验证并推送后，本机更新通过 GitHub CI 的版本。
+把会话、提示词、知识资料和任务放在同一个工作空间。智作台提供中文界面、账号登录、SQLite 数据保存，以及从 GitHub 到本机 Docker 的自动更新流程。
 
-工作台入口为 **http://127.0.0.1:3000**，Windows 智作台服务端入口为 **http://127.0.0.1:3100**。在服务端接入多个模型服务、启用模型并设置默认模型后，前端自动同步，也可以在对话输入框选择其他已启用模型。支持 OpenAI 兼容、Claude Messages 和 Gemini 原生文本对话协议。历史演示记录保留原标记；静态 GitHub Pages 版本没有本机模型桥接。
+> 本页对应完整发布分支 **`main`**：账号注册、账号／邮箱密码登录、数据后端和独立 Windows 服务端统一维护。配置可用模型接口后，工作台发送真实文本对话并统计 Token；已有演示历史保留标记。仅安装和浏览工作台不需要 API 密钥。
 
-## 本地、云端与 GitHub 同步
+## 功能概览
 
-两端均使用本仓库的 `codex/gpt-docker-github` 分支，按 [代码同步说明](docs/source-sync.md) 开发：先拉取、修改和验证，再提交推送。运行目录和聊天窗口里的未提交片段不参与代码发布。
+| 功能 | 当前主分支支持 |
+| --- | --- |
+| 会话与任务 | 真实模型文本对话（需配置独立服务端）、历史会话、复制与导出、请求结果、重试和任务记录 |
+| 提示词 | 模板浏览、编辑、分类与收藏，常用提示词显示在首页 |
+| 知识资料 | 添加资料、阅读 UTF-8 文本、搜索正文、将资料带入对话输入框 |
+| 全局搜索 | 搜索提示词、会话、资料与任务，支持 `Ctrl / ⌘ + K` |
+| 账号与工作空间 | 注册、账号或邮箱密码登录，每个账号使用独立工作空间，兼容旧版密码用户 |
+| 数据与同步 | SQLite 持久保存、自动保存、同账号跨页面同步、冲突处理和 JSON 导入导出 |
+| 界面与运维 | 深色主题、手机布局、同步状态、运行版本、数据库备份与代码回退 |
+| 模型与服务端 | 多服务商、多模型选择、独立加密密钥、实际 Token 用量、月限额、服务启停、日志及局域网入口 |
 
-Windows 更新任务每分钟检查 GitHub，等待**同一提交的 push CI 全部通过**，再构建 Docker 前后端、备份数据并切换独立服务端。管理页面“版本与更新”显示仓库、分支、Docker 与服务端的提交版本。失败时恢复上一版本代码，保留当前数据库。
+## 快速开始（Linux）
 
-源码目录为 `public/`、`src/`、`admin/` 和 `ops/windows/`。API 密钥、密码、业务数据库、聊天内容、内部认证令牌和本机路径配置留在运行目录，不上传 GitHub。Windows 安装布局及自更新流程见 [代码同步说明](docs/source-sync.md)，管理功能见 [服务端说明](admin/README.md)。
+### 1. 准备环境
 
-## Linux Docker 安装
+安装 Git、Python 3 和 Docker Desktop for Linux（Compose 2.33.1+），打开 Docker Desktop 并等待引擎就绪。自动更新还需要可用的 `systemd` 用户服务。以日常使用 Docker Desktop 的用户运行安装命令；Node.js 由容器提供，无需在本机单独安装。项目显式使用 IPv4 容器网络，匹配后端和 Windows 模型桥接；不修改 Docker Desktop 全局网络设置。
 
-Linux 本机需要 Git、Python 3 和已启动的 Docker Desktop。以日常使用 Docker Desktop 的用户运行：
+### 2. 安装主分支
 
 ```bash
-git clone --branch codex/gpt-docker-github https://github.com/wen3343055414-sys/AI---WQS.git
+git clone --branch main https://github.com/wen3343055414-sys/AI---WQS.git
 cd AI---WQS
-bash scripts/install-local-server.sh --branch codex/gpt-docker-github
+bash scripts/install-local-server.sh --branch main
 ```
 
-打开 **http://127.0.0.1:3000**，首次访问在网页设置密码。Docker Desktop → Containers 中会出现 `ai-wqs-server`，包含 `frontend` 和 `backend`。
+安装程序配置 `ai-wqs-server` 项目、`frontend`／`backend` 容器及后台更新定时器。首次部署需要等待当前提交的 GitHub 验收通过；尚未通过时，定时器会继续检查。
 
-上面跟随当前开发分支，适合在 GPT 中继续迭代。功能合并到主分支后，可重新运行安装脚本并指定 `--branch main`。端口被占用时加 `--port 3001`；局域网访问加 `--bind 0.0.0.0`。
+### 3. 打开工作台
 
-## 自动同步
+访问 [http://127.0.0.1:3000](http://127.0.0.1:3000)。首次访问注册账号与邮箱，设置 **10–128 个字符**的密码；之后可用账号密码或邮箱密码登录。旧版密码用户使用账号 `admin` 和原密码，原有数据保留。
+
+安装命令可追加以下参数：
+
+| 参数 | 用途 |
+| --- | --- |
+| `--port 3001` | 改用端口 3001，访问地址相应调整 |
+| `--bind 0.0.0.0` | 允许局域网连接，其他设备使用本机局域网 IP 和端口登录 |
+| `--no-systemd` | 手动运行，不安装后台更新定时器 |
+
+默认仅监听本机。局域网连接还取决于防火墙和网络设置。已有安装的分支、数据目录与维护方式见 [服务器使用指南](docs/local-server.md)。
+
+## 账号与数据保存
+
+- **账号隔离**：同一账号在不同设备登录后读取相同工作空间，新账号的数据彼此独立。旧版兼容账号首次登录空工作空间时，可迁入同一站点的有效旧浏览器数据。
+- **登录方式**：账号与邮箱密码登录可用。手机验证码入口已提供，短信服务尚未接入；邮箱目前用于登录标识，邮箱验证与邮件找回密码尚未接入。详见 [账户登录与注册](docs/authentication.md)。
+- **保存位置**：本机服务器模式将业务数据保存在 Docker 持久卷中，容器重建后继续保留；静态部署使用当前浏览器存储。
+- **资料范围**：TXT、Markdown、CSV、JSON 支持 UTF-8 正文读取，每个文件不超过 1 MB，正文合计不超过 150 万字符；其他格式仅保存文件信息。完整容量限制见 [服务器使用指南](docs/local-server.md)。
+
+GitHub 保存应用代码和公开开发摘要。密码、数据库、业务内容、API 密钥与聊天全文不进入公开仓库。
+
+## 自动更新与数据同步
 
 ```mermaid
 flowchart LR
-    GPT[GPT / Codex 修改代码] --> GitHub[GitHub 跟随分支]
-    GitHub --> CI[自动测试和容器检查]
-    CI --> Update[本机每分钟检查更新]
-    Update --> Front[Docker 前端 Nginx]
-    Update --> Back[Docker 后端 Node.js]
-    Front <--> Back
-    Back <--> DB[(本机 SQLite 持久卷)]
+    Dev[GPT / Codex 任务分支开发] --> Push[经 PR 审阅合入 main]
+    Push --> CI[同一提交的 push CI 验收成功]
+    CI --> Timer[本机定时器检查更新]
+    Timer --> Deploy[备份并更新 Docker 服务]
+    Deploy --> Front[Nginx 前端]
+    Front <--> Back[Node.js 后端]
+    Back <--> DB[(SQLite 持久卷)]
+    Deploy --> Admin[Windows 独立服务端]
+    Back <--> Admin
 ```
 
-- **代码版本**：本机跟随选定分支，只部署同一提交通过验收后的版本。GitHub 分支与 PR 继续作为开发和审阅入口。
-- **业务数据**：会话、提示词、资料、任务和设置由后端统一保存。前端自动保存，其他已登录页面约每 8 秒同步；并发冲突保留本页内容并提示处理。
-- **升级与备份**：升级前及运行期间每天备份数据库，保留最近 30 份。容器重建保留数据，新版启动失败时恢复上一代码版本。
-- **浏览器版本**：无未完成输入时自动刷新到新版本；正在编辑时保留输入并提示刷新。
+- **代码更新**：本机发布跟随 `main`，约每分钟检查。任务分支的修改需经 PR 合入 `main`，并通过该 SHA 的 push CI，才会进入更新流程；还需构建和健康检查时间，不保证提交后立即上线。
+- **数据同步**：页面自动保存修改，其他已登录页面约每 8 秒检查更新。离线修改保留待发送缓存，恢复连接后重试；发生并发冲突时保留本页内容并提示选择。
+- **版本切换**：没有未完成输入时，浏览器自动刷新到新版本；正在编辑时保留输入并提示刷新。
+- **备份与回退**：工作空间数据库升级前及每天备份，保留最近 30 份；Windows 管理数据库在升级前另建快照。新版启动失败时恢复上一代码版本，保留当前业务数据。
 
-GitHub 保存代码与公开开发摘要，业务数据保存在本机数据库。自动更新需要电脑开机、Docker 引擎运行并能连接 GitHub。Docker Desktop 使用用户登录会话；本配置不保证退出登录或休眠期间持续提供服务。
+自动更新需要本机已完成安装、电脑开机、Docker 引擎运行且能够访问 GitHub。Docker Desktop 依赖用户登录会话；休眠、断电或退出登录期间不保证持续服务。云端提交代码后，由本机定时器执行部署。
 
-## 已有功能
+## 日常维护
 
-首页、真实模型对话、提示词管理与收藏、知识资料与正文搜索、任务记录、全局搜索、深色主题、JSON 备份恢复，以及本机登录、数据库保存、同步状态和运行版本。Windows 管理服务提供启停、日志、备份、更新、API 设置和实际 Token 用量。
-
-API 设置按“服务商连接 / 模型列表 / 用量与限额”组织。国内、海外及本机模板支持独立密钥、模型目录获取、手动模型 ID、显示名称、启停、默认模型和月 Token 限额。既有单接口配置自动迁移，设计参考与协议边界见 [多模型管理说明](docs/multi-model-settings.md)。
-
-首次登录空数据库时，会迁入同一站点原有的有效浏览器数据。支持 UTF-8 文本资料；容量边界见 [服务器使用指南](docs/local-server.md)。
-
-## 日常使用
-
-在 GPT / Codex 中选择这个仓库和本机跟随的分支修改代码。提交推送后，本机等待 CI 成功，再自动更新前后端。其他分支的修改需要先合入跟随分支。
+以下命令用于默认 Linux 安装：
 
 ```bash
-# 本机版本和自动更新日志
+# 查看当前版本与更新日志
 python3 ~/.local/share/ai-wqs-server/deployer.py status
-journalctl --user -u ai-wqs-update.service -n 60
 systemctl --user status ai-wqs-update.timer
+journalctl --user -u ai-wqs-update.service -n 60
 
-# 立即更新、备份或回退
+# 立即检查更新、备份数据库、回退上一代码版本
 python3 ~/.local/share/ai-wqs-server/deployer.py update
 python3 ~/.local/share/ai-wqs-server/deployer.py backup
 python3 ~/.local/share/ai-wqs-server/deployer.py rollback
+
+# 暂停或恢复自动更新
+systemctl --user stop ai-wqs-update.timer
+systemctl --user start ai-wqs-update.timer
 ```
 
-自定义 XDG_DATA_HOME 时使用对应数据目录。完整说明见 [服务器使用指南](docs/local-server.md)。
+自定义 `XDG_DATA_HOME` 时，使用对应的数据目录。数据库快照默认仍在同一电脑，可在设置中导出 JSON 并另存备份。需要长期停止服务时，先暂停定时器，再在 Docker Desktop 中停止 `ai-wqs-server`；保留持久卷即可保留数据库。
 
-## 开发与验证
+## 本地开发与验证
 
-Node.js 24.10.0+，零第三方运行依赖：
+直接运行源码需要 **Node.js 24.10.0 及以上的 24.x 版本**，运行时无第三方依赖：
 
 ```bash
-npm start             # http://127.0.0.1:3000，数据库在 ./data
+npm ci
+npm start             # http://127.0.0.1:3000，数据库默认在 ./data
+```
+
+开发时可用 `npm run dev` 监听源码变化。提交前运行：
+
+```bash
 npm test
 python3 -m unittest discover -s tests -p 'test_*.py'
+node scripts/check-source.mjs
 npm run build
 docker compose config --quiet
 ```
 
-手动启动 Docker 使用 `bash scripts/start-linux.sh`。直接修改前端可使用开发挂载：
+手动启动 Docker 可运行 `bash scripts/start-linux.sh`；该方式不安装后台更新定时器。前端挂载开发模式可运行：
 
 ```bash
 docker --context desktop-linux compose -f compose.yaml -f compose.dev.yaml up --build --detach --wait
 ```
 
-CI 验证应用、更新器规则和实际前后端容器。`GET /api/health` 表示服务可用，`GET /api/status` 提供版本与登录状态，工作空间接口需要登录。
+GitHub CI 验证应用、Python 更新器规则、前后端容器 HTTP 行为及登录界面。`GET /api/health` 用于健康检查，`GET /api/status` 提供版本与登录状态，工作空间接口需要登录。
 
-Windows 使用 `python -m unittest discover -s tests -p 'test_windows_*.py'`，避免运行仅支持 Linux 的 fcntl 更新器测试；另运行 `python -m unittest discover -s admin/tests -p 'test_*.py'`。`npm test` 同时运行工作台和管理服务测试，包含 Windows DPAPI 验证。推送前运行 `node scripts/check-source.mjs` 检查源码边界。
+Windows 运行 `python -m unittest discover -s tests -p 'test_windows_*.py'`，另运行 `python -m unittest discover -s admin/tests -p 'test_*.py'`；Windows 密钥测试可通过 `AI_WQS_TEST_PYTHON` 指定实际 Python 路径。
 
-## 静态部署与保存规则
+## 静态部署
 
-`npm run build` 仍生成可托管的 dist/，原有 GitHub Pages 工作流继续保留。静态版本使用浏览器保存，与本机数据库独立；数据库和自动部署通过本机 Docker 服务使用。
+`npm run build` 生成 `dist/`，可用于静态托管。GitHub Pages 需先在仓库 **Settings → Pages → Source** 选择 **GitHub Actions**，再使用“部署 GitHub Pages”工作流发布构建产物。
 
-遵循 [AGENTS.md](AGENTS.md)：验证后更新公开日志、提交推送任务分支，通过 PR 交付，不自动合并主分支。真实凭据、数据库、业务数据和聊天全文不进入公开代码仓库。
+静态版本使用浏览器存储，可展示界面和保存浏览器数据。账号登录、数据库、真实模型对话和自动更新依赖后端与对应服务端；静态托管不会启动 Node.js、SQLite、Docker 或保管模型密钥。
+
+## Windows 管理端与真实模型接入
+
+完整发布源码包含独立 Windows 管理服务，入口为 [http://127.0.0.1:3100](http://127.0.0.1:3100)，工作台入口为 [http://127.0.0.1:3000](http://127.0.0.1:3000)：
+
+- 独立 Windows 管理服务，提供服务启停、日志、备份、版本更新和局域网入口管理。
+- 多服务商与多模型设置，支持 OpenAI 兼容、Anthropic Messages 和 Gemini 原生文本协议；配置可用模型后，工作台使用真实模型对话。
+- Windows DPAPI 本机密钥保管、实际 Token 用量统计与月限额。
+
+安装与运行要求见 [服务端说明](admin/README.md) 和 [代码同步说明](docs/source-sync.md)。Linux 安装入口部署工作台前后端，Windows 管理服务依赖 DPAPI 与任务计划。原安装从 `codex/gpt-docker-github` 切换到 `main` 前，目标必须包含当前发布历史及完整服务源码；不能跳过分叉检查。
+
+## 项目文档
+
+- [服务器使用指南](docs/local-server.md)：安装配置、数据边界、接口、备份与回退。
+- [账户登录与注册](docs/authentication.md)：账号规则、旧用户迁移与短信状态。
+- [开发与本机服务协作](docs/development-workflow.md)：提交、GitHub 验收与本机部署流程。
+- [项目工作与保存规则](AGENTS.md)：验证、公开工作日志、任务分支和 PR 交付约定。
