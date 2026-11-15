@@ -202,7 +202,7 @@ try {
     await page.locator('#todo-form input[name="title"]').fill(title);
     await page.locator('#todo-form textarea[name="notes"]').fill(notes);
     await page.getByRole("button", { name: "保存任务", exact: true }).click();
-    await page.locator("#todo-form").waitFor({ state: "detached" });
+    await page.locator("#todo-form").waitFor({ state: "hidden" });
   };
   await page.goto(base + "/#todo");
   await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
@@ -215,14 +215,14 @@ try {
   await page.locator('#todo-form input[name="title"]').fill("规划新版本");
   await page.locator('#todo-form textarea[name="notes"]').fill("海风待办 <b>原样备注</b>");
   await page.getByRole("button", { name: "保存任务", exact: true }).click();
-  await page.locator("#todo-form").waitFor({ state: "detached" });
+  await page.locator("#todo-form").waitFor({ state: "hidden" });
   await createTask("整理工具入口");
   assert.equal(await page.locator(".todo-item").count(), 2);
   assert.equal(await page.locator(".todo-copy b").count(), 0, "Task notes must be rendered as text");
   await page.getByRole("button", { name: "编辑任务：规划新版本", exact: true }).click();
   await page.locator('#todo-form input[name="title"]').fill("规划新版本 · 已更新");
   await page.getByRole("button", { name: "保存任务", exact: true }).click();
-  await page.locator("#todo-form").waitFor({ state: "detached" });
+  await page.locator("#todo-form").waitFor({ state: "hidden" });
   await page.getByRole("checkbox", { name: "标记完成：整理工具入口", exact: true }).click();
   assert.equal(await page.locator(".todo-item.is-done").count(), 1);
   await page.locator('#todo-tabs [data-id="已完成"]').click();
