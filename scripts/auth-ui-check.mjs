@@ -42,6 +42,16 @@ try {
   assert.equal(await page.getByRole("tab").count(), 3);
   assert.equal(await page.locator("#auth-account").inputValue(), "admin");
   await page.screenshot({ path: path.join(output, "login-account-desktop.png") });
+  assert.equal(await page.locator(".auth-social").count(), 3);
+  for (const social of await page.locator(".auth-social").all()) assert.equal(await social.isDisabled(), true);
+  await page.getByRole("button", { name: "忘记密码？", exact: true }).click();
+  await page.getByRole("heading", { name: "找回密码", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "自助找回暂未开放", exact: true }).waitFor();
+  assert.equal(await page.locator('input[type="password"]').count(), 0);
+  await page.screenshot({ path: path.join(output, "recovery-desktop.png") });
+  await page.getByRole("button", { name: "返回登录", exact: true }).click();
+  await page.locator("#auth-account").waitFor();
+  assert.equal(await page.locator("#auth-account").inputValue(), "admin");
   await page.locator("#auth-password").fill("visibility-test");
   await page.getByRole("button", { name: "显示密码", exact: true }).click();
   assert.equal(await page.locator("#auth-password").getAttribute("type"), "text");
@@ -94,12 +104,26 @@ try {
   await logout();
   await page.getByRole("tab", { name: "账号密码", exact: true }).click();
   await page.locator("#auth-account").fill("admin");
+  await page.getByLabel("记住账号", { exact: true }).check();
   await page.locator("#auth-password").fill(password);
   await page.getByRole("button", { name: "登录", exact: true }).click();
   await page.waitForFunction(() => !document.querySelector(".server-access").open);
   await page.goto(base + "/#prompts");
   await page.getByRole("heading", { name: "原有工作空间记录", exact: true }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).count(), 0);
+  const remembered = await page.evaluate(() => JSON.parse(localStorage.getItem("zhizuotai.auth.preferences.v1")));
+  assert.deepEqual(remembered, { method: "account", account: "admin" });
+  assert.equal(Object.hasOwn(remembered, "password"), false);
+  await logout();
+  await page.reload({ waitUntil: "networkidle" });
+  await page.locator(".server-access[open]").waitFor();
+  assert.equal(await page.locator("#auth-account").inputValue(), "admin");
+  assert.equal(await page.getByLabel("记住账号", { exact: true }).isChecked(), true);
+  await page.getByLabel("记住账号", { exact: true }).uncheck();
+  await page.locator("#auth-password").fill(password);
+  await page.getByRole("button", { name: "登录", exact: true }).click();
+  await page.waitForFunction(() => !document.querySelector(".server-access").open);
+  assert.equal(await page.evaluate(() => localStorage.getItem("zhizuotai.auth.preferences.v1")), null);
   await logout();
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
@@ -114,7 +138,7 @@ try {
     await page.getByRole("button", { name: "去登录", exact: true }).click();
   }
   assert.deepEqual(errors, []);
-  console.log("Authentication UI passed: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
+  console.log("Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {
   if (browser) await browser.close();
   if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill(); await stopped; }
