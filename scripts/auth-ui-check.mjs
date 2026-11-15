@@ -203,6 +203,15 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(base + "/#home");
     await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.waitForFunction(() => {
+      const menu = document.querySelector("#sidebar").getBoundingClientRect();
+      return menu.left >= -0.5 && menu.right <= innerWidth + 1;
+    });
+    assert.ok(await page.locator("#sidebar").evaluate(element => {
+      const settings = element.querySelector(".sidebar-settings").getBoundingClientRect();
+      const note = element.querySelector(".local-card").getBoundingClientRect();
+      return settings.top >= note.bottom && settings.bottom <= innerHeight + 1;
+    }), "Settings must occupy the bottom slot below the sidebar note");
     assert.equal(await page.locator("#sidebar a").last().getAttribute("href"), "#settings");
     await page.screenshot({ path: path.join(output, "settings-menu-mobile-" + width + ".png") });
     await page.locator('#sidebar a[href="#settings"]').click();
