@@ -129,6 +129,9 @@ try {
   await page.waitForFunction(() => !document.querySelector(".server-access").open);
   assert.equal(await page.evaluate(() => localStorage.getItem("zhizuotai.auth.preferences.v1")), null);
   const assertNavigation = async () => {
+    assert.equal(await page.locator('.topbar [data-action="help"]').count(), 0);
+    assert.deepEqual(await page.locator("#sidebar nav .nav-link").evaluateAll(links => links.map(link => link.getAttribute("href"))),
+      ["#todo", "#home", "#chat", "#prompts", "#knowledge", "#plugins", "#tasks"]);
     assert.equal(await page.locator("#sidebar .local-card").count(), 0);
     assert.equal(await page.locator('.topbar [data-action="new"]').count(), 0);
     assert.equal(await page.locator('.topbar [data-action="new-chat"]').count(), 0);
@@ -186,6 +189,113 @@ try {
   await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
   assert.equal(await historyLinks.count(), 2);
 
+  const waitWorkspace = async predicate => {
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const data = await (await context.request.get(base + "/api/workspace")).json();
+      if (predicate(data.state)) return data.state;
+      await page.waitForTimeout(100);
+    }
+    throw new Error("Feature changes were not persisted");
+  };
+  const createTask = async (title, notes = "") => {
+    await page.locator('.page-intro [data-action="new-todo"]').click();
+    await page.locator('#todo-form input[name="title"]').fill(title);
+    await page.locator('#todo-form textarea[name="notes"]').fill(notes);
+    await page.getByRole("button", { name: "保存任务", exact: true }).click();
+    await page.locator("#todo-form").waitFor({ state: "detached" });
+  };
+  await page.goto(base + "/#todo");
+  await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
+  await assertNavigation();
+  assert.equal(await page.locator(".todo-item").count(), 0);
+  await page.locator('.page-intro [data-action="new-todo"]').click();
+  await page.locator('#todo-form input[name="title"]').fill("   ");
+  await page.getByRole("button", { name: "保存任务", exact: true }).click();
+  await page.locator("#form-error").filter({ hasText: "请输入" }).waitFor();
+  await page.locator('#todo-form input[name="title"]').fill("规划新版本");
+  await page.locator('#todo-form textarea[name="notes"]').fill("海风待办 <b>原样备注</b>");
+  await page.getByRole("button", { name: "保存任务", exact: true }).click();
+  await page.locator("#todo-form").waitFor({ state: "detached" });
+  await createTask("整理工具入口");
+  assert.equal(await page.locator(".todo-item").count(), 2);
+  assert.equal(await page.locator(".todo-copy b").count(), 0, "Task notes must be rendered as text");
+  await page.getByRole("button", { name: "编辑任务：规划新版本", exact: true }).click();
+  await page.locator('#todo-form input[name="title"]').fill("规划新版本 · 已更新");
+  await page.getByRole("button", { name: "保存任务", exact: true }).click();
+  await page.locator("#todo-form").waitFor({ state: "detached" });
+  await page.getByRole("checkbox", { name: "标记完成：整理工具入口", exact: true }).click();
+  assert.equal(await page.locator(".todo-item.is-done").count(), 1);
+  await page.locator('#todo-tabs [data-id="已完成"]').click();
+  assert.equal(await page.locator(".todo-item").count(), 1);
+  assert.match(await page.locator(".todo-item").innerText(), /整理工具入口/);
+  await page.getByRole("checkbox", { name: "恢复待办：整理工具入口", exact: true }).click();
+  assert.equal(await page.locator(".todo-item").count(), 0);
+  await page.locator('#todo-tabs [data-id="待完成"]').click();
+  assert.equal(await page.locator(".todo-item").count(), 2);
+  await page.getByRole("checkbox", { name: "标记完成：整理工具入口", exact: true }).click();
+  assert.equal(await page.locator(".todo-item").count(), 1);
+  await page.locator('#todo-tabs [data-id="全部"]').click();
+  await page.locator("#todo-search").fill("海风待办");
+  assert.equal(await page.locator(".todo-item").count(), 1);
+  await page.locator("#todo-search").fill("不存在的任务");
+  await page.getByText("没有符合条件的任务", { exact: true }).waitFor();
+  await page.locator("#todo-search").fill("");
+  await page.getByRole("button", { name: "删除任务：规划新版本 · 已更新", exact: true }).click();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  assert.equal(await page.locator(".todo-item").count(), 2);
+  await createTask("临时任务");
+  await page.getByRole("button", { name: "删除任务：临时任务", exact: true }).click();
+  await page.locator('#dialog [data-action="confirm"]').click();
+  await page.locator("#dialog").waitFor({ state: "hidden" });
+  assert.equal(await page.locator(".todo-item").count(), 2);
+  const taskState = await waitWorkspace(state => state.todos?.length === 2 && state.todos.some(todo => todo.title === "整理工具入口" && todo.done));
+  assert.equal(taskState.sessions.length, 2);
+  assert.equal(taskState.tasks.length, 3);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
+  assert.equal(await page.locator(".todo-item").count(), 2);
+  assert.equal(await page.locator(".todo-item.is-done").count(), 1);
+  await page.screenshot({ path: path.join(output, "features-tasks-desktop.png") });
+
+  await page.locator('#sidebar a[href="#plugins"]').click();
+  await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
+  assert.equal(await page.locator(".plugin-card").count(), 3);
+  const statsCard = page.locator('[data-tool-id="text-stats"]');
+  await statsCard.getByRole("switch", { name: "文本统计", exact: true }).click();
+  assert.equal(await statsCard.getByRole("switch").getAttribute("aria-checked"), "false");
+  assert.equal(await statsCard.getByRole("button", { name: "使用工具", exact: true }).isDisabled(), true);
+  await waitWorkspace(state => !state.settings.enabledTools?.includes("text-stats"));
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
+  assert.equal(await statsCard.getByRole("switch").getAttribute("aria-checked"), "false");
+  await statsCard.getByRole("switch").click();
+  await statsCard.getByRole("button", { name: "使用工具", exact: true }).click();
+  await page.locator("#tool-text").fill("A🙂 中\n\n第二行");
+  assert.equal(await page.locator('[data-stat="characters"]').innerText(), "9");
+  assert.equal(await page.locator('[data-stat="nonWhitespace"]').innerText(), "6");
+  assert.equal(await page.locator('[data-stat="lines"]').innerText(), "3");
+  assert.equal(await page.locator('[data-stat="paragraphs"]').innerText(), "2");
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  await page.locator('[data-tool-id="workspace-search"]').getByRole("button", { name: "使用工具", exact: true }).click();
+  await page.locator("#global-search").fill("海风待办");
+  assert.equal(await page.locator('.search-result[data-kind="todo"]').count(), 1);
+  await page.locator('.search-result[data-kind="todo"]').click();
+  assert.equal(await page.locator('#todo-form input[name="title"]').inputValue(), "规划新版本 · 已更新");
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  await page.locator('[data-tool-id="data-export"]').getByRole("button", { name: "使用工具", exact: true }).click();
+  const featureDownloadReady = page.waitForEvent("download");
+  await page.getByRole("button", { name: "导出 JSON 备份", exact: true }).click();
+  const featureDownload = await featureDownloadReady;
+  assert.equal(featureDownload.suggestedFilename(), "智作台-工作空间备份.json");
+  const featureBackup = JSON.parse(await readFile(await featureDownload.path(), "utf8"));
+  assert.equal(featureBackup.todos.length, 2);
+  assert.equal(featureBackup.sessions.length, 2);
+  assert.ok(featureBackup.settings.enabledTools.includes("text-stats"));
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+  await statsCard.getByRole("switch").click();
+  await waitWorkspace(state => !state.settings.enabledTools.includes("text-stats"));
+  await page.screenshot({ path: path.join(output, "features-plugins-desktop.png") });
+
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
   assert.equal(await page.locator("#sidebar .profile").count(), 0);
@@ -195,6 +305,11 @@ try {
   await page.getByRole("heading", { name: "账号管理", exact: true }).waitFor();
   await page.getByRole("heading", { name: "我的工作空间", exact: true }).waitFor();
   assert.equal(await page.locator("[data-current-account]").innerText(), "admin");
+  assert.equal(await page.getByRole("heading", { name: "使用帮助", exact: true }).count(), 1);
+  await page.getByRole("button", { name: "打开使用帮助", exact: true }).click();
+  await page.getByRole("heading", { name: "欢迎使用智作台", exact: true }).waitFor();
+  assert.match(await page.locator("#dialog").innerText(), /在任务中记录待办/);
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
   await page.screenshot({ path: path.join(output, "settings-account-desktop.png") });
   const status = async () => (await context.request.get(base + "/api/status")).json();
   const addAccount = async () => {
@@ -237,6 +352,9 @@ try {
   await page.waitForFunction(() => !document.querySelector(".server-access").open);
   assert.equal(await page.locator("[data-current-account]").innerText(), "bob");
   assert.equal(await page.locator("[data-current-email]").innerText(), "bob@example.test");
+  const bobFeatures = await (await context.request.get(base + "/api/workspace")).json();
+  assert.equal(bobFeatures.state.todos.length, 0);
+  assert.ok(bobFeatures.state.settings.enabledTools.includes("text-stats"));
   await page.goto(base + "/#prompts");
   await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "原有工作空间记录", exact: true }).count(), 0);
@@ -252,6 +370,8 @@ try {
   const charlieState = await (await context.request.get(base + "/api/workspace")).json();
   assert.ok(!JSON.stringify(charlieState.state).includes("Bob 的独立提示词"));
   assert.ok(!JSON.stringify(charlieState.state).includes("原有工作空间记录"));
+  assert.equal(charlieState.state.todos.length, 0);
+  assert.ok(charlieState.state.settings.enabledTools.includes("text-stats"));
   await addAccount();
   await page.locator("#auth-account").fill("admin");
   await page.locator("#auth-password").fill(password);
@@ -261,6 +381,9 @@ try {
   await page.goto(base + "/#prompts");
   await page.getByRole("heading", { name: "原有工作空间记录", exact: true }).waitFor();
   assert.equal(await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).count(), 0);
+  const returnedFeatures = await (await context.request.get(base + "/api/workspace")).json();
+  assert.equal(returnedFeatures.state.todos.length, 2);
+  assert.ok(!returnedFeatures.state.settings.enabledTools.includes("text-stats"));
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
@@ -312,6 +435,20 @@ try {
     assert.equal(await historyLinks.count(), 2);
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "History must fit mobile width");
     await page.screenshot({ path: path.join(output, "navigation-history-mobile-" + width + ".png") });
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
+    await page.locator('#sidebar a[href="#todo"]').click();
+    await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
+    assert.equal(await page.locator(".todo-item").count(), 2);
+    assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Tasks must fit mobile width");
+    await page.screenshot({ path: path.join(output, "features-tasks-mobile-" + width + ".png") });
+    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
+    await page.locator('#sidebar a[href="#plugins"]').click();
+    await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
+    assert.equal(await page.locator(".plugin-card").count(), 3);
+    assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Plugins must fit mobile width");
+    await page.screenshot({ path: path.join(output, "features-plugins-mobile-" + width + ".png") });
 
   }
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -329,6 +466,7 @@ try {
     await page.getByRole("button", { name: "去登录", exact: true }).click();
   }
   assert.deepEqual(errors, []);
+  console.log("Task and built-in tool checks passed: navigation order, help relocation, create/edit/complete/filter/delete, Unicode statistics, tool toggles, JSON backup, reload and account isolation.");
   console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {
   if (browser) await browser.close();
