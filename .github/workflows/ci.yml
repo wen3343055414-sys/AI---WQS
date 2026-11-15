@@ -72,6 +72,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24"
+      - name: Install Chinese fonts for browser previews
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes --no-install-recommends fonts-noto-cjk
       - name: Install isolated browser test tooling
         run: npm install --prefix "$RUNNER_TEMP/auth-ui" --no-package-lock --no-save playwright@1.56.1
       - name: Verify authentication screens and flows
