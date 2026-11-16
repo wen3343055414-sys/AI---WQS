@@ -5,6 +5,11 @@ export const MODELS = {
   writing: "写作助手",
   coding: "编程助手",
 };
+export const BUILTIN_TOOLS = [
+  { id: "workspace-search", title: "工作空间搜索", description: "快速查找任务、提示词、历史对话和知识资料。", icon: "search", tone: "purple" },
+  { id: "text-stats", title: "文本统计", description: "实时查看字符、非空字符、行数与段落数。", icon: "chart", tone: "blue" },
+  { id: "data-export", title: "数据导出", description: "将当前账号的工作空间保存为 JSON 备份。", icon: "download", tone: "green" },
+];
 export const MAX_FILE_SIZE = 1024 * 1024;
 export const MAX_DOCUMENT_CHARS = 1_500_000;
 export const STARTERS = [
@@ -120,7 +125,8 @@ export function createInitialState() {
     sessions: [],
     documents: [],
     tasks: [],
-    settings: { theme: "light", model: "general" },
+    todos: [],
+    settings: { theme: "light", model: "general", enabledTools: BUILTIN_TOOLS.map(tool => tool.id) },
   };
 }
 const isText = (v, max = 50_000) => typeof v === "string" && v.length <= max;
@@ -142,6 +148,19 @@ export function validateState(value) {
     (value.settings.modelKey !== undefined && value.settings.modelKey !== '' && !isModelKey(value.settings.modelKey))
   )
     return false;
+  if (value.settings.enabledTools !== undefined && (
+    !Array.isArray(value.settings.enabledTools) ||
+    value.settings.enabledTools.length > BUILTIN_TOOLS.length ||
+    new Set(value.settings.enabledTools).size !== value.settings.enabledTools.length ||
+    !value.settings.enabledTools.every(id => BUILTIN_TOOLS.some(tool => tool.id === id))
+  )) return false;
+  // Optional additive fields keep pre-feature workspaces and backups readable.
+  if (value.todos !== undefined && (
+    !Array.isArray(value.todos) || value.todos.length > 1000 || !uniqueIds(value.todos) ||
+    !value.todos.every(todo => isId(todo.id) && isText(todo.title, 100) && Boolean(todo.title.trim()) &&
+      isText(todo.notes, 2000) && typeof todo.done === "boolean" &&
+      isTime(todo.createdAt) && isTime(todo.updatedAt))
+  )) return false;
   if (
     !["prompts", "sessions", "documents", "tasks"].every(
       (k) =>
@@ -393,7 +412,7 @@ export function searchWorkspace(state, query) {
         kind: "session",
         id: s.id,
         title: s.title,
-        label: "历史会话",
+        label: "历史对话",
       })),
     ...state.documents
       .filter((d) => contains(d.name, d.tag, d.content))
@@ -403,13 +422,63 @@ export function searchWorkspace(state, query) {
         title: d.name,
         label: `知识资料 · ${d.tag}`,
       })),
+    ...(state.todos || [])
+      .filter(todo => contains(todo.title, todo.notes))
+      .map(todo => ({ kind: "todo", id: todo.id, title: todo.title, label: todo.done ? "任务 · 已完成" : "任务 · 待完成" })),
     ...state.tasks
       .filter((t) => contains(t.title, t.type))
       .map((t) => ({
         kind: "task",
         id: t.id,
         title: t.title,
-        label: t.status === 'demo' ? "任务记录 · 历史演示" : "任务记录 · 模型对话",
+        label: t.status === 'demo' ? "对话请求 · 历史演示" : "对话请求 · 模型对话",
       })),
   ].slice(0, 30);
+}
+
+
+export function saveTodo(state, id, fields, now = new Date().toISOString()) {
+  const title = typeof fields.title === "string" ? fields.title.trim() : "";
+  const notes = typeof fields.notes === "string" ? fields.notes.trim() : "";
+  if (!title || title.length > 100 || notes.length > 2000 || !isTime(now))
+    throw new Error("请输入 1–100 字的任务名称，备注不超过 2,000 字。");
+  const items = state.todos || [];
+  const todo = items.find(item => item.id === id);
+  if (id && !todo) throw new Error("任务已不存在，请刷新后重试。");
+  if (!id && items.length >= 1000) throw new Error("任务已达上限，请先导出并清理已完成任务。");
+  if (todo) Object.assign(todo, { title, notes, updatedAt: now });
+  else {
+    const created = { id: uid("todo"), title, notes, done: false, createdAt: now, updatedAt: now };
+    state.todos = [created, ...items];
+    return created.id;
+  }
+  return todo.id;
+}
+export function setTodoDone(state, id, done, now = new Date().toISOString()) {
+  const todo = state.todos?.find(item => item.id === id);
+  if (!todo || typeof done !== "boolean" || !isTime(now)) throw new Error("任务状态无效，请刷新后重试。");
+  todo.done = done;
+  todo.updatedAt = now;
+}
+export function removeTodo(state, id) {
+  state.todos = (state.todos || []).filter(item => item.id !== id);
+}
+export function enabledToolIds(state) {
+  return state.settings.enabledTools ?? BUILTIN_TOOLS.map(tool => tool.id);
+}
+export function setToolEnabled(state, id, enabled) {
+  if (!BUILTIN_TOOLS.some(tool => tool.id === id) || typeof enabled !== "boolean")
+    throw new Error("此工具不可用。");
+  const selected = new Set(enabledToolIds(state));
+  if (enabled) selected.add(id);
+  else selected.delete(id);
+  state.settings.enabledTools = BUILTIN_TOOLS.filter(tool => selected.has(tool.id)).map(tool => tool.id);
+}
+export function summarizeText(text) {
+  return {
+    characters: Array.from(text).length,
+    nonWhitespace: Array.from(text.replace(/\s/gu, "")).length,
+    lines: text ? text.split(/\r\n|\r|\n/).length : 0,
+    paragraphs: text.trim() ? text.replace(/\r\n?/g, "\n").trim().split(/\n[ \t]*\n(?:[ \t]*\n)*/).filter(part => part.trim()).length : 0,
+  };
 }
