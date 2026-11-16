@@ -174,7 +174,7 @@ class UpdaterNetworkTests(unittest.TestCase):
         (release / 'release.json').write_text('{}', encoding='utf-8')
         before = (release / 'update-windows.py').read_bytes()
         loaded = bootstrap.load_implementation(self.root)
-        self.assertEqual(loaded.Deployment(self.root).current_path, self.root / 'current.json')
+        self.assertEqual(loaded.Deployment(self.root).current_path, (self.root / 'current.json').resolve())
         self.assertEqual((release / 'update-windows.py').read_bytes(), before)
         self.module.write_json(self.root / 'current.json', {'sha': '../../outside'})
         with self.assertRaisesRegex(RuntimeError, 'Invalid deployed'):
