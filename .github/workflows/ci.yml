@@ -80,16 +80,6 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/auth-ui" --no-package-lock --no-save playwright@1.56.1
       - name: Verify authentication screens and flows
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/auth-ui-check.mjs
-      - name: Review sidebar previews
-        if: always()
-        run: |
-          node --input-type=module <<'NODE'
-          import { existsSync, readFileSync } from 'node:fs';
-          for (const name of ['sidebar-expanded-desktop', 'sidebar-collapsed-desktop', 'sidebar-open-mobile-320', 'sidebar-closed-mobile-320']) {
-            const file = 'artifacts/auth/' + name + '.png';
-            if (existsSync(file)) console.log('SIDEBAR_REVIEW_IMAGE:' + name + ':' + readFileSync(file).toString('base64'));
-          }
-          NODE
       - name: Save login previews
         if: always()
         uses: actions/upload-artifact@v4
