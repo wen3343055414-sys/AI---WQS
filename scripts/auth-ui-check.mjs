@@ -142,6 +142,89 @@ try {
       return start.bottom <= home.top;
     }), "New conversation must appear above Home");
   };
+  const waitDesktopSidebar = async expanded => {
+    await page.waitForFunction(expanded => {
+      const sidebar = document.querySelector("#sidebar"), workspace = document.querySelector(".workspace");
+      const bounds = sidebar.getBoundingClientRect(), left = workspace.getBoundingClientRect().left;
+      return expanded ? bounds.left >= -0.5 && left >= bounds.right - 1 && !sidebar.inert :
+        bounds.right <= 0.5 && left <= 0.5 && sidebar.inert;
+    }, expanded);
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-expanded"), String(expanded));
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-label"), expanded ? "收起侧边栏" : "展开侧边栏");
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("title"), expanded ? "收起侧边栏" : "展开侧边栏");
+  };
+  await page.goto(base + "/#chat/" + olderSessionId);
+  await page.locator("#messages .message").nth(3).waitFor();
+  await waitDesktopSidebar(true);
+  assert.ok(await page.locator(".topbar").evaluate(element => {
+    const toggle = element.querySelector("[data-menu-button]").getBoundingClientRect();
+    const breadcrumb = element.querySelector(".breadcrumb").getBoundingClientRect();
+    return toggle.width > 0 && toggle.right <= breadcrumb.left;
+  }), "The sidebar toggle must precede the workspace breadcrumb");
+  const expandedWidth = await page.locator(".workspace").evaluate(element => element.clientWidth);
+  await page.locator("#message-input").fill("侧边栏切换保留的草稿");
+  const messageBefore = await page.locator("#messages").innerText();
+  const scrollBefore = await page.locator("#messages").evaluate(element => {
+    element.scrollTop = 0;
+    return element.scrollTop;
+  });
+  await page.screenshot({ path: path.join(output, "sidebar-expanded-desktop.png") });
+  await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
+  await waitDesktopSidebar(false);
+  assert.ok(await page.locator(".workspace").evaluate(element => element.clientWidth) > expandedWidth + 180, "Collapsing the sidebar must release its width");
+  assert.equal(await page.locator(".chat-sidebar").isVisible(), true);
+  assert.equal(await page.locator("#messages").innerText(), messageBefore);
+  assert.equal(await page.locator("#messages").evaluate(element => element.scrollTop), scrollBefore);
+  assert.equal(await page.locator("#message-input").inputValue(), "侧边栏切换保留的草稿");
+  assert.equal(await page.locator("#sidebar").getAttribute("aria-hidden"), "true");
+  await page.locator("[data-menu-button]").focus();
+  for (let step = 0; step < 8; step++) {
+    await page.keyboard.press("Tab");
+    assert.equal(await page.locator("#sidebar").evaluate(element => element.contains(document.activeElement)), false, "Collapsed links must leave the keyboard focus order");
+  }
+  await page.screenshot({ path: path.join(output, "sidebar-collapsed-desktop.png") });
+  await page.locator("#message-input").fill("");
+  await page.evaluate(() => { location.hash = "#tasks"; });
+  await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
+  await waitDesktopSidebar(false);
+  await page.reload({ waitUntil: "networkidle" });
+  await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
+  await waitDesktopSidebar(false);
+  assert.equal(await page.evaluate(() => localStorage.getItem("zhizuotai.sidebar.collapsed.v1")), "true");
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).waitFor();
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+  await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await waitDesktopSidebar(false);
+  await page.locator("[data-menu-button]").focus();
+  await page.keyboard.press("Enter");
+  await waitDesktopSidebar(true);
+  await page.keyboard.press("Space");
+  await waitDesktopSidebar(false);
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+  await waitDesktopSidebar(true);
+  assert.equal(await page.evaluate(() => localStorage.getItem("zhizuotai.sidebar.collapsed.v1")), "false");
+  const storageFallback = await context.newPage();
+  storageFallback.on("pageerror", error => errors.push(error.message));
+  await storageFallback.addInitScript(() => {
+    const get = Storage.prototype.getItem, set = Storage.prototype.setItem;
+    Storage.prototype.getItem = function(key) {
+      if (key === "zhizuotai.sidebar.collapsed.v1") throw new DOMException("Layout storage unavailable", "SecurityError");
+      return get.call(this, key);
+    };
+    Storage.prototype.setItem = function(key, value) {
+      if (key === "zhizuotai.sidebar.collapsed.v1") throw new DOMException("Layout storage unavailable", "SecurityError");
+      return set.call(this, key, value);
+    };
+  });
+  await storageFallback.goto(base + "/#home", { waitUntil: "networkidle" });
+  await storageFallback.waitForFunction(() => !document.querySelector(".server-access").open);
+  await storageFallback.getByRole("button", { name: "收起侧边栏", exact: true }).click();
+  await storageFallback.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+  assert.equal(await storageFallback.locator("[data-menu-button]").getAttribute("aria-expanded"), "true");
+  await storageFallback.close();
+
   await page.goto(base + "/#home");
   await assertNavigation();
   await page.screenshot({ path: path.join(output, "navigation-home-desktop.png") });
@@ -399,14 +482,48 @@ try {
   await page.goto(base + "/#settings");
   assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth));
   await page.screenshot({ path: path.join(output, "settings-account-tablet.png") });
+  await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
+  await waitDesktopSidebar(false);
+  assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth));
+  await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+  await waitDesktopSidebar(true);
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(base + "/#home");
-    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-expanded"), "false");
+    await page.screenshot({ path: path.join(output, "sidebar-closed-mobile-" + width + ".png") });
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-expanded"), "true");
+    assert.equal(await page.locator(".workspace").evaluate(element => element.inert), false);
+    assert.equal(await page.locator(".main").evaluate(element => element.inert), true);
+    assert.equal(await page.locator(".topbar-tools").evaluate(element => element.inert), true);
+    assert.ok(await page.locator(".topbar").evaluate(element => {
+      const toggle = element.querySelector("[data-menu-button]").getBoundingClientRect();
+      const sidebar = document.querySelector("#sidebar").getBoundingClientRect();
+      return toggle.bottom <= sidebar.top && toggle.left >= 0;
+    }), "The mobile toggle must remain above the expanded drawer");
+    await page.locator("[data-menu-button]").focus();
+    await page.keyboard.press("Tab");
+    assert.equal(await page.locator(".brand").evaluate(element => element === document.activeElement), true);
+    await page.keyboard.press("Shift+Tab");
+    assert.equal(await page.locator("[data-menu-button]").evaluate(element => element === document.activeElement), true);
+    await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
+    await page.waitForFunction(() => document.querySelector("#sidebar").inert);
+    assert.equal(await page.locator(".main").evaluate(element => element.inert), false);
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+    await page.keyboard.press("Escape");
+    assert.equal(await page.locator("[data-menu-button]").evaluate(element => element === document.activeElement), true);
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-expanded"), "false");
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+    await page.locator(".sidebar-backdrop").click({ position: { x: width - 10, y: 100 } });
+    assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-expanded"), "false");
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
     await page.waitForFunction(() => {
       const menu = document.querySelector("#sidebar").getBoundingClientRect();
       return menu.left >= -0.5 && menu.right <= innerWidth + 1;
     });
+    await page.screenshot({ path: path.join(output, "sidebar-open-mobile-" + width + ".png") });
     assert.ok(await page.locator("#sidebar").evaluate(element => {
       const settings = element.querySelector(".sidebar-settings").getBoundingClientRect();
       const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
@@ -421,28 +538,28 @@ try {
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Settings must fit mobile width");
     await page.screenshot({ path: path.join(output, "settings-account-mobile-" + width + ".png") });
     await page.goto(base + "/#home");
-    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await assertNavigation();
     await page.locator("#sidebar .sidebar-new-chat").click();
     await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
     assert.equal(await page.locator("#message-input").inputValue(), "");
     assert.equal(await page.locator("body").evaluate(element => element.classList.contains("sidebar-open")), false);
-    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await page.locator('#sidebar a[href="#tasks"]').click();
     await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
     assert.equal(await historyLinks.count(), 2);
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "History must fit mobile width");
     await page.screenshot({ path: path.join(output, "navigation-history-mobile-" + width + ".png") });
-    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await page.locator('#sidebar a[href="#todo"]').click();
     await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
     assert.equal(await page.locator(".todo-item").count(), 2);
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Tasks must fit mobile width");
     await page.screenshot({ path: path.join(output, "features-tasks-mobile-" + width + ".png") });
-    await page.getByRole("button", { name: "打开导航", exact: true }).click();
+    await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await page.locator('#sidebar a[href="#plugins"]').click();
     await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
@@ -466,6 +583,7 @@ try {
     await page.getByRole("button", { name: "去登录", exact: true }).click();
   }
   assert.deepEqual(errors, []);
+  console.log("Sidebar toggle passed: header placement, desktop width recovery, retained messages/draft/scroll, reload and route persistence, keyboard controls, storage fallback, responsive preference isolation, and mobile toggle/backdrop/Escape/focus handling.");
   console.log("Task and built-in tool checks passed: navigation order, help relocation, create/edit/complete/filter/delete, Unicode statistics, tool toggles, JSON backup, reload and account isolation.");
   console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {

@@ -67,6 +67,8 @@ const paths = {
   copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M15 8V3H3v12h5"/>',
   refresh: '<path d="M20 8A8.5 8.5 0 1 0 21 14M20 3v5h-5"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  "sidebar-close": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16m7-12-4 4 4 4"/>',
+  "sidebar-open": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16m4-12 4 4-4 4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
   folder: '<path d="M3 5h7l2 3h9v12H3V5Z"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
@@ -123,6 +125,9 @@ const dialog = document.querySelector("#dialog");
 const app = document.querySelector("#app");
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 const mobile = matchMedia("(max-width: 760px)");
+const SIDEBAR_VIEW_KEY = "zhizuotai.sidebar.collapsed.v1";
+let sidebarCollapsed = false;
+try { sidebarCollapsed = localStorage.getItem(SIDEBAR_VIEW_KEY) === "true"; } catch { /* Layout remains usable when storage is unavailable. */ }
 
 function route() {
   const [page, id] = location.hash.slice(1).split("/");
@@ -600,10 +605,8 @@ function render() {
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置<small>账号、工作空间与偏好</small></span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航"></button><div class="workspace"><header class="topbar">${iconButton("menu", "打开导航", "menu", 'aria-expanded="false" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span></div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
-  // The menu button needs one class attribute to remain available on small screens.
-  document.querySelector("[data-menu-button]").classList.add("mobile-menu");
-  document.querySelector("#sidebar").inert = mobile.matches;
+    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置<small>账号、工作空间与偏好</small></span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航" tabindex="-1"></button><div class="workspace"><header class="topbar">${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle", 'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span></div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
+  syncSidebar();
   const messages = document.querySelector("#messages");
   if (messages) messages.scrollTop = messages.scrollHeight;
   if (focusNewConversation && page === "chat" && !route().id) {
@@ -771,16 +774,36 @@ async function addFiles(files) {
     );
   else if (count) toast(`已在本地添加 ${count} 份资料`);
 }
-function setMenu(open) {
-  document.body.classList.toggle("sidebar-open", open);
+function syncSidebar() {
+  const expanded = mobile.matches ? document.body.classList.contains("sidebar-open") : !sidebarCollapsed;
+  document.body.classList.toggle("sidebar-collapsed", !mobile.matches && sidebarCollapsed);
   const sidebar = document.querySelector("#sidebar");
-  sidebar.inert = mobile.matches && !open;
-  document.querySelector(".workspace").inert = open;
-  document
-    .querySelector("[data-menu-button]")
-    .setAttribute("aria-expanded", String(open));
-  if (open) sidebar.querySelector(".sidebar-new-chat").focus();
-  else document.querySelector("[data-menu-button]").focus();
+  const toggle = document.querySelector("[data-menu-button]");
+  if (!expanded && sidebar.contains(document.activeElement)) toggle.focus();
+  sidebar.inert = !expanded;
+  sidebar.setAttribute("aria-hidden", String(!expanded));
+  document.querySelector(".workspace").inert = false;
+  document.querySelector(".main").inert = mobile.matches && expanded;
+  document.querySelector(".topbar-tools").inert = mobile.matches && expanded;
+  const label = expanded ? "收起侧边栏" : "展开侧边栏";
+  toggle.setAttribute("aria-expanded", String(expanded));
+  toggle.setAttribute("aria-label", label);
+  toggle.title = label;
+  toggle.innerHTML = icon(expanded ? "sidebar-close" : "sidebar-open") + `<span data-sidebar-toggle-label>${label}</span>`;
+}
+function setMenu(open, restoreFocus = true) {
+  document.body.classList.toggle("sidebar-open", mobile.matches && open);
+  syncSidebar();
+  if (mobile.matches && open) document.querySelector(".sidebar-new-chat").focus();
+  else if (restoreFocus) document.querySelector("[data-menu-button]").focus();
+}
+function toggleSidebar() {
+  if (mobile.matches) setMenu(!document.body.classList.contains("sidebar-open"));
+  else {
+    sidebarCollapsed = !sidebarCollapsed;
+    try { localStorage.setItem(SIDEBAR_VIEW_KEY, String(sidebarCollapsed)); } catch { /* Only the saved layout preference is optional. */ }
+    syncSidebar();
+  }
 }
 
 async function handleAction(target) {
@@ -788,8 +811,8 @@ async function handleAction(target) {
   if (chatPending && ['delete-session', 'reset', 'import-backup'].includes(action)) throw new Error('模型正在回复，请等待完成后再修改会话记录。');
   const session = state.sessions.find((s) => s.id === route().id);
   switch (action) {
-    case "menu":
-      setMenu(true);
+    case "toggle-sidebar":
+      toggleSidebar();
       break;
     case "close-menu":
       setMenu(false);
@@ -1104,14 +1127,7 @@ async function handleAction(target) {
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (target) handleAction(target).catch((error) => toast(error.message, true));
-  if (event.target.closest(".sidebar a") && mobile.matches) {
-    document.body.classList.remove("sidebar-open");
-    document.querySelector(".workspace").inert = false;
-    document.querySelector("#sidebar").inert = true;
-    document
-      .querySelector("[data-menu-button]")
-      .setAttribute("aria-expanded", "false");
-  }
+  if (event.target.closest(".sidebar a") && mobile.matches) setMenu(false, false);
 });
 document.addEventListener("submit", (event) => {
   const form = event.target;
@@ -1273,8 +1289,8 @@ document.addEventListener("keydown", (event) => {
     document.body.classList.contains("sidebar-open")
   )
     setMenu(false);
-  if (event.key === "Tab" && document.body.classList.contains("sidebar-open")) {
-    const focusable = [...document.querySelectorAll(".sidebar a, .sidebar button:not(:disabled)")];
+  if (event.key === "Tab" && !dialog.open && document.body.classList.contains("sidebar-open")) {
+    const focusable = [...document.querySelectorAll(".sidebar a, .sidebar button:not(:disabled)"), document.querySelector("[data-menu-button]")];
     const first = focusable[0],
       last = focusable.at(-1);
     if (event.shiftKey && document.activeElement === first) {
@@ -1325,14 +1341,7 @@ window.addEventListener("hashchange", () => {
   document.querySelector("#page-title")?.focus({ preventScroll: true });
 });
 systemTheme.addEventListener("change", applyTheme);
-mobile.addEventListener("change", () => {
-  document.body.classList.remove("sidebar-open");
-  document.querySelector("#sidebar").inert = mobile.matches;
-  document.querySelector(".workspace").inert = false;
-  document
-    .querySelector("[data-menu-button]")
-    .setAttribute("aria-expanded", "false");
-});
+mobile.addEventListener("change", () => setMenu(false, false));
 render();
 if (initial.warning) toast(initial.warning, true);
 function clearAccountView() {
