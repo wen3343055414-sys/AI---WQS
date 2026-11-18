@@ -21,8 +21,8 @@ export class ProviderError extends HttpError {
 }
 // No redirects, raw provider errors, or credentials in diagnostics. DNS is pinned
 // after validation, with the same address restrictions as the settings probe.
-export async function completeChat(config, apiKey, messages, { resolver = lookup, maxTokens = 4096 } = {}) {
-  const { url, input } = chatRequest(config, messages, maxTokens);
+export async function completeChat(config, apiKey, messages, { resolver = lookup, maxTokens = 4096, tools = [] } = {}) {
+  const { url, input } = chatRequest(config, messages, maxTokens, tools);
   const hostname = url.hostname.replace(/^\[|\]$/g, '');
   const payload = JSON.stringify(input);
   let request, expired = false, timer;
@@ -57,12 +57,20 @@ export async function completeChat(config, apiKey, messages, { resolver = lookup
           let data;
           try { data = JSON.parse(Buffer.concat(chunks).toString('utf8')); }
           catch { reject(new ProviderError('模型接口返回了无效的 JSON。', 'invalid_response')); return; }
-          const { usage, content, finishReason } = parseReply(config, data);
-          if (typeof content !== 'string' || !content.trim() || content.length > 50_000 || (apiKey && content.includes(apiKey))) {
-            reject(new ProviderError('模型接口未返回可显示的回复，请检查模型配置后重试。', 'invalid_response', usage)); return;
+          const { usage, content, finishReason, toolCalls } = parseReply(config, data);
+          const hasCalls = Array.isArray(toolCalls) && toolCalls.length > 0;
+          const validCalls = !hasCalls || tools.length && toolCalls.length <= 4 && new Set(toolCalls.map(call => call.id)).size === toolCalls.length && toolCalls.every(call => {
+            if (typeof call.id !== 'string' || !/^[A-Za-z0-9_.:-]{1,128}$/.test(call.id) ||
+              !tools.some(tool => tool.function.name === call.name) || typeof call.arguments !== 'string' || call.arguments.length > 40_000 ||
+              call.thoughtSignature !== undefined && (typeof call.thoughtSignature !== 'string' || call.thoughtSignature.length > 16384)) return false;
+            try { const args = JSON.parse(call.arguments); return args && typeof args === 'object' && !Array.isArray(args); } catch { return false; }
+          });
+          if (!validCalls || typeof content !== 'string' || (!content.trim() && !hasCalls) || content.length > 50_000 ||
+            apiKey && JSON.stringify({ content, toolCalls }).includes(apiKey)) {
+            reject(new ProviderError('模型接口未返回可显示的回复或有效工具请求，请检查模型配置后重试。', 'invalid_response', usage)); return;
           }
-          if (!['stop', 'length'].includes(finishReason)) { reject(new ProviderError('模型未正常完成回复，请稍后重试。', 'incomplete_response', usage)); return; }
-          resolve({ content, model: config.model, finishReason, usage });
+          if (!['stop', 'length', ...(hasCalls ? ['tool_calls'] : [])].includes(finishReason)) { reject(new ProviderError('模型未正常完成回复，请稍后重试。', 'incomplete_response', usage)); return; }
+          resolve({ content, model: config.model, finishReason, usage, ...(hasCalls ? { toolCalls } : {}) });
         });
       });
       request.on('error', reject);
