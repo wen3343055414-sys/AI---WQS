@@ -342,41 +342,14 @@ try {
 
   await page.locator('#sidebar a[href="#plugins"]').click();
   await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
-  assert.equal(await page.locator(".plugin-card").count(), 3);
-  const statsCard = page.locator('[data-tool-id="text-stats"]');
-  await statsCard.getByRole("switch", { name: "文本统计", exact: true }).click();
-  assert.equal(await statsCard.getByRole("switch").getAttribute("aria-checked"), "false");
-  assert.equal(await statsCard.getByRole("button", { name: "使用工具", exact: true }).isDisabled(), true);
-  await waitWorkspace(state => !state.settings.enabledTools?.includes("text-stats"));
-  await page.reload({ waitUntil: "networkidle" });
-  await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
-  assert.equal(await statsCard.getByRole("switch").getAttribute("aria-checked"), "false");
-  await statsCard.getByRole("switch").click();
-  await statsCard.getByRole("button", { name: "使用工具", exact: true }).click();
-  await page.locator("#tool-text").fill("A🙂 中\n\n第二行");
-  assert.equal(await page.locator('[data-stat="characters"]').innerText(), "9");
-  assert.equal(await page.locator('[data-stat="nonWhitespace"]').innerText(), "6");
-  assert.equal(await page.locator('[data-stat="lines"]').innerText(), "3");
-  assert.equal(await page.locator('[data-stat="paragraphs"]').innerText(), "2");
+  assert.equal(await page.locator(".plugin-catalog-card").count(), 2);
+  await page.getByRole("heading", { name: "连接更多工具", exact: true }).waitFor();
+  assert.equal(await page.getByText("内置工具", { exact: true }).count(), 0);
+  assert.equal((await (await context.request.get(base + "/api/plugins")).json()).connections.length, 0);
+  await page.locator('[data-action="plugin-connect-github"]').click();
+  await page.locator('[name="token"]').waitFor();
+  assert.equal(await page.locator('[name="token"]').getAttribute("type"), "password");
   await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
-  await page.locator('[data-tool-id="workspace-search"]').getByRole("button", { name: "使用工具", exact: true }).click();
-  await page.locator("#global-search").fill("海风待办");
-  assert.equal(await page.locator('.search-result[data-kind="todo"]').count(), 1);
-  await page.locator('.search-result[data-kind="todo"]').click();
-  assert.equal(await page.locator('#todo-form input[name="title"]').inputValue(), "规划新版本 · 已更新");
-  await page.getByRole("button", { name: "取消", exact: true }).click();
-  await page.locator('[data-tool-id="data-export"]').getByRole("button", { name: "使用工具", exact: true }).click();
-  const featureDownloadReady = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出 JSON 备份", exact: true }).click();
-  const featureDownload = await featureDownloadReady;
-  assert.equal(featureDownload.suggestedFilename(), "智作台-工作空间备份.json");
-  const featureBackup = JSON.parse(await readFile(await featureDownload.path(), "utf8"));
-  assert.equal(featureBackup.todos.length, 2);
-  assert.equal(featureBackup.sessions.length, 2);
-  assert.ok(featureBackup.settings.enabledTools.includes("text-stats"));
-  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
-  await statsCard.getByRole("switch").click();
-  await waitWorkspace(state => !state.settings.enabledTools.includes("text-stats"));
   await page.screenshot({ path: path.join(output, "features-plugins-desktop.png") });
 
   await page.goto(base + "/#home");
@@ -466,7 +439,7 @@ try {
   assert.equal(await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).count(), 0);
   const returnedFeatures = await (await context.request.get(base + "/api/workspace")).json();
   assert.equal(returnedFeatures.state.todos.length, 2);
-  assert.ok(!returnedFeatures.state.settings.enabledTools.includes("text-stats"));
+  assert.equal((await (await context.request.get(base + "/api/plugins")).json()).connections.length, 0);
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
@@ -563,7 +536,7 @@ try {
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await page.locator('#sidebar a[href="#plugins"]').click();
     await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
-    assert.equal(await page.locator(".plugin-card").count(), 3);
+    assert.equal(await page.locator(".plugin-catalog-card").count(), 2);
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Plugins must fit mobile width");
     await page.screenshot({ path: path.join(output, "features-plugins-mobile-" + width + ".png") });
 
@@ -584,7 +557,7 @@ try {
   }
   assert.deepEqual(errors, []);
   console.log("Sidebar toggle passed: header placement, desktop width recovery, retained messages/draft/scroll, reload and route persistence, keyboard controls, storage fallback, responsive preference isolation, and mobile toggle/backdrop/Escape/focus handling.");
-  console.log("Task and built-in tool checks passed: navigation order, help relocation, create/edit/complete/filter/delete, Unicode statistics, tool toggles, JSON backup, reload and account isolation.");
+  console.log("Task and plugin catalog checks passed: navigation order, help relocation, create/edit/complete/filter/delete, real connection entry, masked credentials, empty account catalog and mobile layouts.");
   console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {
   if (browser) await browser.close();

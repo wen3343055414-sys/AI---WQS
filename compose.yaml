@@ -8,6 +8,8 @@ services:
       args:
         APP_VERSION: ${APP_VERSION:-local}
     image: ai-wqs-backend:${APP_VERSION:-local}
+    environment:
+      MCP_ALLOWED_LOCAL_ORIGINS: ${MCP_ALLOWED_LOCAL_ORIGINS:-}
     expose:
       - "3000"
     volumes:

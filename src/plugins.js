@@ -49,7 +49,7 @@ export class PluginService {
     try { writeFileSync(keyFile, randomBytes(32), { flag: 'wx', mode: 0o600 }); }
     catch (error) { if (error.code !== 'EEXIST') throw error; }
     this.key = readFileSync(keyFile);
-    if (this.key.length !== 32) throw fault('plugin_key', '插件凭据文件无效，请恢复原凭据文件或重新配置连接。', 500);
+    if (this.key.length !== 32) this.key = null;
     this.db.exec(`CREATE TABLE IF NOT EXISTS plugin_connections (
       id TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id), name TEXT NOT NULL, kind TEXT NOT NULL,
       endpoint TEXT NOT NULL, auth_mode TEXT NOT NULL, credential TEXT NOT NULL, enabled INTEGER NOT NULL,
@@ -63,9 +63,14 @@ export class PluginService {
       CREATE INDEX IF NOT EXISTS plugin_calls_user ON plugin_invocations(user_id,created_at);
       UPDATE plugin_invocations SET status='unknown', error_message='服务重启，上次插件操作结果未确认；请核对远端状态。'
         WHERE status='running';`);
+    for (const row of this.db.prepare("SELECT * FROM plugin_connections WHERE credential!=''").all()) {
+      try { this.secret(row); }
+      catch { this.db.prepare("UPDATE plugin_connections SET status='error',last_error=? WHERE id=?").run('插件凭据不可读，请恢复原凭据文件或重新连接。', row.id); }
+    }
   }
   protect(value, row) {
     if (!value) return '';
+    if (!this.key) throw fault('plugin_key', '插件凭据文件无效，请恢复原文件后重试。', 503);
     const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', this.key, iv);
     cipher.setAAD(Buffer.from(JSON.stringify([row.user_id, row.id, row.endpoint])));
     const body = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
@@ -109,6 +114,7 @@ export class PluginService {
     const token = typeof input.token === 'string' ? input.token.trim() : '';
     if (!['none', 'bearer'].includes(authMode) || authMode === 'bearer' && (!/^[\x21-\x7e]{8,4096}$/.test(token)) ||
       authMode === 'none' && token) throw fault('plugin_auth', '请选择授权方式并填写有效令牌；无授权方式请留空令牌。');
+    if (authMode === 'bearer' && !this.key) throw fault('plugin_key', '插件凭据文件无效，请恢复原文件后重试。', 503);
     if (this.db.prepare('SELECT 1 FROM plugin_connections WHERE user_id=? AND endpoint=?').get(userId, endpoint))
       throw fault('plugin_exists', '此服务已连接，请刷新列表或先断开旧连接。', 409);
     const row = { id: 'plugin_' + randomBytes(16).toString('hex'), user_id: userId, name, kind, endpoint, auth_mode: authMode };
@@ -239,6 +245,10 @@ export class PluginService {
         this.db.prepare('UPDATE plugin_invocations SET status=?,finished_at=?,result=? WHERE user_id=? AND request_id=?')
           .run(result.isError ? 'error' : 'success', stamp(), JSON.stringify(result), userId, requestId);
       } catch (error) {
+        if (['plugin_auth', 'plugin_http', 'plugin_timeout', 'plugin_interrupted', 'plugin_unavailable', 'plugin_protocol', 'plugin_credentials', 'plugin_address', 'plugin_secret_echo'].includes(error.code)) {
+          this.clients.delete(id);
+          this.db.prepare("UPDATE plugin_connections SET status='error',last_error=? WHERE id=? AND user_id=?").run(error.message, id, userId);
+        }
         this.db.prepare('UPDATE plugin_invocations SET status=?,finished_at=?,error_message=? WHERE user_id=? AND request_id=?')
           .run(sent ? 'unknown' : 'error', stamp(), error instanceof HttpError ? error.message : '插件操作未完成，请核对远端状态。', userId, requestId);
       }

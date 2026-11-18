@@ -80,6 +80,18 @@ jobs:
         run: npm install --prefix "$RUNNER_TEMP/auth-ui" --no-package-lock --no-save playwright@1.56.1
       - name: Verify authentication screens and flows
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/auth-ui-check.mjs
+      - name: Verify real MCP connections and conversation tools
+        run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/plugins-ui-check.mjs
+      - name: Preview plugin screens for review
+        if: always()
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, existsSync } from 'node:fs';
+          for (const name of ['plugins-center-desktop', 'plugins-tools-desktop', 'plugins-approval-desktop', 'plugins-center-mobile-320']) {
+            const file = 'artifacts/auth/' + name + '.png';
+            if (existsSync(file)) console.log('MCP_PREVIEW:' + name + ':' + readFileSync(file).toString('base64'));
+          }
+          JS
       - name: Save login previews
         if: always()
         uses: actions/upload-artifact@v4

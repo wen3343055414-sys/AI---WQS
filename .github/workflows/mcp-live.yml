@@ -1,0 +1,27 @@
+name: 公共 MCP 实连验收
+on:
+  pull_request:
+    paths:
+      - "src/plugin*.js"
+      - "scripts/check-mcp-live.mjs"
+      - ".github/workflows/mcp-live.yml"
+  push:
+    branches: ["feat/**", "codex/**"]
+    paths:
+      - "src/plugin*.js"
+      - "scripts/check-mcp-live.mjs"
+      - ".github/workflows/mcp-live.yml"
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  public-mcp:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Discover and invoke a public MCP tool without credentials
+        run: node scripts/check-mcp-live.mjs
