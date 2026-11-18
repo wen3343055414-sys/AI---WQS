@@ -561,7 +561,7 @@ async function pluginDetails(id) {
   openDialog(connection.name + " · 可用工具",
     `<form id="plugin-tools-form" class="dialog-body" data-id="${e(id)}" data-revision="${connection.revision}"><p>选择允许模型在对话中请求的工具，最多 40 项。实际执行仍需确认。</p>
     <div class="plugin-tool-list">${connection.tools.map(tool => `<article class="plugin-tool-row" data-tool-name="${e(tool.name)}"><label><input type="checkbox" name="tools" value="${e(tool.name)}" ${selected.has(tool.name) ? "checked" : ""} /><span><strong>${e(tool.title || tool.name)}</strong><code>${e(tool.name)}</code><small>${e(tool.description)}</small></span></label>
-      ${button("plugin-tool-open", "执行工具", "arrow", "btn", `data-id="${e(id)}" data-tool="${e(tool.name)}" ${connection.enabled ? "" : "disabled"}`)}</article>`).join("") || empty("puzzle", "暂无可用工具", "此服务暂未开放工具，请检查权限后重新验证连接。")}</div>
+      ${button("plugin-tool-open", "执行工具", "arrow", "btn", `data-id="${e(id)}" data-tool="${e(tool.name)}" ${connection.enabled && connection.status === "connected" ? "" : "disabled"}`)}</article>`).join("") || empty("puzzle", "暂无可用工具", "此服务暂未开放工具，请检查权限后重新验证连接。")}</div>
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}<button class="btn btn-primary" type="submit">保存对话工具</button></div></form>`, "plugin-tools-dialog");
 }
 function toolExample(schema) {

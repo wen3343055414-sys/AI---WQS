@@ -224,6 +224,7 @@ export class PluginService {
       if (this.active.has(key)) return this.active.get(key);
       return this.callView(prior);
     }
+    if (row.status !== 'connected') throw fault('plugin_connection', '插件连接异常，请先重新验证连接再执行新操作。', 409);
     if (this.active.size >= 8 || [...this.active.keys()].filter(key => key.startsWith(userId + ':')).length >= 2)
       throw fault('plugin_busy', '插件调用正在处理，请等待当前操作完成。', 429);
     this.db.prepare('INSERT INTO plugin_invocations(user_id,request_id,connection_id,plugin_name,tool_name,fingerprint,status,created_at) VALUES (?,?,?,?,?,?,?,?)')

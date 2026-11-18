@@ -140,6 +140,7 @@ export class PluginAgent {
     // arguments can never replace this immutable approved plan.
     for (const call of body.pending) {
       const connection = this.plugins.row(userId, call.binding.connectionId, true);
+      if (connection.status !== 'connected') return Promise.reject(fault('plugin_connection', '插件连接异常，请先重新验证后发起新的确认。', 409));
       if (connection.revision !== call.binding.revision) return Promise.reject(fault('plugin_changed', '插件配置已变化，请重新发起对话并确认。', 409));
     }
     this.save(row, body, 'executing');
