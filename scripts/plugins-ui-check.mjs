@@ -120,6 +120,7 @@ try {
   assert.equal((await (await context.request.get(base + '/api/plugins')).json()).connections[0].id, id);
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
+    await page.waitForFunction(() => Math.abs(document.querySelector('.workspace').getBoundingClientRect().left) < 0.5);
     assert.ok(await page.locator('.main').evaluate(element => element.scrollWidth <= element.clientWidth), 'Plugin catalog must fit mobile');
     await page.screenshot({ path: path.join(output, 'plugins-center-mobile-' + width + '.png'), fullPage: true });
     await card.getByRole('button', { name: '查看工具', exact: true }).click();
@@ -150,7 +151,9 @@ try {
       bridgeCalls: bridge.state.calls.length, toolCalls: mcp.state.calls.length,
       ui: await pageForFailure.evaluate(() => ({ hash: location.hash, toast: document.querySelector('#toast')?.textContent,
         draft: document.querySelector('#message-form')?.dataset.draft,
-        inputLength: document.querySelector('#message-input')?.value.length, disabled: document.querySelector('#message-form button[type="submit"]')?.disabled }))
+        inputLength: document.querySelector('#message-input')?.value.length, disabled: document.querySelector('#message-form button[type="submit"]')?.disabled,
+        viewport: innerWidth, main: { width: document.querySelector('.main')?.clientWidth, scrollWidth: document.querySelector('.main')?.scrollWidth },
+        overflow: [...document.querySelectorAll('.main *')].filter(el => el.getBoundingClientRect().right > innerWidth + 1).slice(0, 12).map(el => ({ tag: el.tagName, cls: el.className, right: Math.round(el.getBoundingClientRect().right) })) }))
     }));
     await pageForFailure.evaluate(() => document.querySelectorAll('[data-plugin-secret]').forEach(input => { input.value = ''; }));
     await pageForFailure.screenshot({ path: path.join(output, 'plugins-failure.png'), fullPage: true });

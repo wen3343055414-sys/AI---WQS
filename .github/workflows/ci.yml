@@ -87,7 +87,7 @@ jobs:
         run: |
           node --input-type=module <<'JS'
           import { readFileSync, existsSync } from 'node:fs';
-          for (const name of ['plugins-center-desktop', 'plugins-tools-desktop', 'plugins-approval-desktop', 'plugins-center-mobile-320']) {
+          for (const name of ['plugins-center-desktop', 'plugins-tools-desktop', 'plugins-approval-desktop', 'plugins-center-mobile-320', 'plugins-failure']) {
             const file = 'artifacts/auth/' + name + '.png';
             if (existsSync(file)) console.log('MCP_PREVIEW:' + name + ':' + readFileSync(file).toString('base64'));
           }
