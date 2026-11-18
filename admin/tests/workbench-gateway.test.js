@@ -227,3 +227,32 @@ test('gateway enforces declared and chunked body limits and reports real upstrea
   assert.ok(!unavailable.text.includes('ECONNREFUSED')); assert.ok(!unavailable.text.includes(upstreamOrigin));
   for (const address of ['https://127.0.0.1:3000', 'http://attacker.invalid:3000', 'http://127.0.0.1:3100', 'http://127.0.0.1:3200', 'http://user:password@127.0.0.1:3000', 'http://127.0.0.1:3000/admin', 'http://127.0.0.1:3000/?url=anything']) assert.throws(() => createWorkbenchGateway({ upstreamOrigin: address }), /上游/);
 });
+
+test('gateway forwards only exact MCP routes and bounds plugin bodies without exposing other admin paths', async t => {
+  const seen = [];
+  const upstream = createServer(async (req, res) => {
+    let raw = ''; for await (const chunk of req) raw += chunk;
+    seen.push({ path: req.url, method: req.method, cookie: req.headers.cookie, body: raw });
+    res.setHeader('Content-Type', 'application/json'); res.end(JSON.stringify({ reached: true }));
+  });
+  const upstreamOrigin = await listen(upstream);
+  t.after(() => close(upstream));
+  const gateway = createWorkbenchGateway({ upstreamOrigin, allowedHost: host => host === PUBLIC });
+  const base = await listen(gateway);
+  t.after(() => close(gateway));
+  const plugin = '/api/plugins/plugin_' + 'a'.repeat(32), run = '/api/plugin-runs/agent_' + 'b'.repeat(32);
+  const cookie = 'wqs_session=' + 'c'.repeat(64);
+  const headers = { Host: PUBLIC, Cookie: cookie + '; admin_session=fixture-do-not-forward', Origin: 'https://' + PUBLIC };
+  for (const target of ['/api/plugins', plugin, run]) assert.equal((await request(base, target, { headers })).status, 200);
+  for (const target of ['/api/plugins/connect', ...['refresh', 'configure', 'disconnect', 'call'].map(action => plugin + '/' + action), run + '/decide']) {
+    assert.equal((await request(base, target, { method: 'POST', headers, body: { userId: 7, revision: 1 } })).status, 200);
+  }
+  assert.ok(seen.every(item => item.cookie === cookie));
+  const previous = seen.length;
+  for (const target of [plugin + '/delete', plugin + '/../config', '/api/plugin-runs/invalid', '/api/plugins/invalid/call', '/api/model-settings', '/api/plugins.key']) {
+    assert.equal((await request(base, target, { headers })).status, 404);
+  }
+  assert.equal((await request(base, plugin + '/call', { headers })).status, 405);
+  assert.equal((await request(base, plugin + '/call', { method: 'POST', headers, body: { arguments: 'x'.repeat(129000) } })).status, 413);
+  assert.equal(seen.length, previous);
+});

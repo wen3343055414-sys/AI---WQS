@@ -9,6 +9,7 @@ const ROUTES = new Map([
   ['/api/login', ['POST']], ['/api/logout', ['POST']],
   ['/api/register', ['POST']], ['/api/sms/send', ['POST']], ['/api/login/sms', ['POST']],
   ['/api/workspace', ['GET', 'HEAD', 'PUT']], ['/api/model-config', ['GET']], ['/api/chat', ['POST']],
+  ['/api/plugins', ['GET', 'HEAD']], ['/api/plugins/connect', ['POST']],
 ]);
 const RESPONSE_HEADERS = new Set(['content-type', 'content-length', 'content-encoding', 'cache-control',
   'content-security-policy', 'referrer-policy', 'x-content-type-options', 'x-frame-options',
@@ -62,7 +63,8 @@ export function createWorkbenchGateway({ upstreamOrigin = 'http://127.0.0.1:3000
       const hostname = new URL(`http://${host}`).hostname;
       if (!LOOPBACKS.has(hostname) && !allowedHost(hostname)) return fail(421, 'host_rejected', '请使用已启用的工作台网址。');
       const rawPath = request.url?.split('?')[0];
-      const methods = ROUTES.get(rawPath);
+      const methods = ROUTES.get(rawPath) || (/^\/api\/plugins\/plugin_[a-f0-9]{32}$/.test(rawPath) || /^\/api\/plugin-runs\/agent_[a-f0-9]{32}$/.test(rawPath) ? ['GET', 'HEAD'] :
+        /^\/api\/plugins\/plugin_[a-f0-9]{32}\/(?:refresh|configure|disconnect|call)$/.test(rawPath) || /^\/api\/plugin-runs\/agent_[a-f0-9]{32}\/decide$/.test(rawPath) ? ['POST'] : null);
       if (!methods) return fail(404, 'not_found', '页面或接口不存在。');
       if (!methods.includes(request.method)) {
         response.setHeader('Allow', methods.join(', '));
@@ -72,7 +74,7 @@ export function createWorkbenchGateway({ upstreamOrigin = 'http://127.0.0.1:3000
       for (const name of REQUEST_HEADERS) if (typeof request.headers[name] === 'string') headers[name] = request.headers[name];
       const session = request.headers.cookie?.match(/(?:^|;\s*)wqs_session=([a-f0-9]{64})(?:;|$)/)?.[1];
       if (session) headers.cookie = `wqs_session=${session}`;
-      const limit = rawPath === '/api/chat' ? 600_000 : 16 * 1024 * 1024;
+      const limit = rawPath === '/api/chat' ? 600_000 : rawPath.startsWith('/api/plugins/') || rawPath.startsWith('/api/plugin-runs/') ? 128_000 : 16 * 1024 * 1024;
       const length = Number(headers['content-length'] || 0);
       if (!Number.isSafeInteger(length) || length < 0) return fail(400, 'invalid_length', '请求长度无效。');
       if (length > limit) {
@@ -132,7 +134,7 @@ export function createWorkbenchGateway({ upstreamOrigin = 'http://127.0.0.1:3000
       deadline = setTimeout(() => {
         fail(504, 'workbench_timeout', '等待工作台响应超时，请稍后重试。');
         outbound.destroy();
-      }, rawPath === '/api/chat' ? 160_000 : 30_000);
+      }, rawPath === '/api/chat' || rawPath.startsWith('/api/plugins/') ? 160_000 : 30_000);
       deadline.unref();
       let received = 0;
       const bounded = new Transform({ transform(chunk, encoding, callback) {

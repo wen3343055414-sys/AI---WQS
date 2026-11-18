@@ -16,13 +16,9 @@ import {
   removeSession,
   searchWorkspace,
   STARTERS,
-  BUILTIN_TOOLS,
   saveTodo,
   setTodoDone,
   removeTodo,
-  enabledToolIds,
-  setToolEnabled,
-  summarizeText,
 } from "./core.js";
 import { WorkspaceSync } from "./sync.js";
 
@@ -115,6 +111,8 @@ let promptFilter = "全部",
   historyQuery = "",
   todoFilter = "全部",
   todoQuery = "";
+let pluginConnections = [], pluginHistory = [], pluginError = "", pluginsLoaded = false, pluginLoading = false, pluginChecked = 0, pluginViewDirty = false;
+const selectedPluginIds = new Set(), pluginDetailsCache = new Map(), pluginApprovals = new Map();
 const drafts = new Map();
 let pendingType = "AI 对话";
 let focusNewConversation = false;
@@ -191,25 +189,40 @@ async function refreshModelConfig(force = false) {
     document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = current.ready ? `已连接 ${current.provider} · ${current.model}` : current.message; });
     if (changed && !chatPending) document.querySelectorAll('[data-setting="modelKey"]').forEach(select => { if (document.activeElement !== select) select.innerHTML = aiModelOptions(); });
     const send = document.querySelector('#message-form button[type=submit]');
-    if (send) send.disabled = Boolean(chatPending || !current.ready);
+    if (send) send.disabled = Boolean(chatPending || !current.ready || hasPluginApproval());
   } catch { if (accountCycle === chatAccountCycle) modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
   finally { if (accountCycle === chatAccountCycle) { modelConfigChecked = Date.now(); modelConfigPending = false; } }
 }
+function hasPluginApproval(sessionId = route().id) {
+  return Boolean(sessionId && state.tasks.some(task => task.sessionId === sessionId && pluginApprovals.has(task.id)));
+}
 function chatRequestNotice(session) {
-  if (!session) return '';
-  if (chatPending?.sessionId === session.id) return '<div class="model-request-status" role="status"><span class="model-spinner"></span>模型正在回复，请稍候…</div>';
+  if (!session) return "";
+  if (chatPending?.sessionId === session.id) return `<div class="model-request-status" role="status"><span class="model-spinner"></span>${chatPending.pluginPhase === "executing" ? "正在执行已确认的插件操作并整理结果…" : chatPending.pluginPhase ? "正在处理插件协作，请稍候…" : "模型正在回复，请稍候…"}</div>`;
   const task = state.tasks.find(item => item.sessionId === session.id);
-  if (!task || !['pending', 'failed'].includes(task.status) || !task.requestId) return '';
-  return `<div class="model-request-status failed" role="status"><span>${e(task.error || '上次请求结果尚未确认，可尝试恢复回复。')}</span>${button(task.status === 'pending' ? 'resume-chat' : 'retry-chat', task.status === 'pending' ? '恢复回复' : '重新请求', '', 'btn', `data-id="${task.id}"`)}</div>`;
+  if (!task || !["pending", "failed"].includes(task.status) || !task.requestId) return "";
+  if (pluginApprovals.has(task.id)) return pluginApprovalView(task.id, pluginApprovals.get(task.id));
+  return `<div class="model-request-status failed" role="status"><span>${e(task.error || "上次请求结果尚未确认，可尝试恢复回复。")}</span>${task.pluginUncertain ?
+    '<a class="btn" href="#plugins">查看插件调用</a>' :
+    button(task.status === "pending" ? "resume-chat" : "retry-chat", task.status === "pending" ? "恢复回复" : "重新请求", "", "btn", `data-id="${task.id}"`)}</div>`;
 }
 async function sendChat(content, draftKey) {
   if (chatPending) throw new Error('请等待当前回复完成。');
+  if (hasPluginApproval()) throw new Error('请先确认或取消当前插件操作。');
+  const pluginIds = [...selectedPluginIds];
   const accountCycle = chatAccountCycle;
   await refreshModelConfig(true);
   if (accountCycle !== chatAccountCycle) return;
   if (chatPending) throw new Error('请等待当前回复完成。');
   if (!activeModel().ready || !sync?.authenticated) throw new Error(activeModel().message || '请先登录并在服务端配置模型接口。');
-  const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType, next.settings.modelKey || ''));
+  if (pluginIds.length) {
+    await refreshPlugins(true);
+    if (accountCycle !== chatAccountCycle) return;
+    if (!modelConfig.toolCalling) throw new Error("当前模型服务端尚不支持插件对话，请先更新服务端。");
+    if (pluginIds.some(id => !pluginConnections.some(connection => connection.id === id && pluginReady(connection))))
+      throw new Error("所选插件已不可用，请重新选择。");
+  }
+  const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType, next.settings.modelKey || '', pluginIds));
   drafts.delete(draftKey);
   const input = document.querySelector('#message-input'); if (input) input.value = '';
   pendingType = 'AI 对话'; go('chat', result.sessionId);
@@ -220,11 +233,11 @@ async function performChat(taskId) {
   const task = state.tasks.find(item => item.id === taskId);
   if (!task) throw new Error('对话任务不存在。');
   const accountCycle = chatAccountCycle;
-  chatPending = { taskId, sessionId: task.sessionId };
+  chatPending = { taskId, sessionId: task.sessionId, pluginPhase: task.pluginIds?.length ? 'planning' : '' };
   render();
   try {
     const session = state.sessions.find(item => item.id === task.sessionId);
-    const input = { requestId: task.requestId, userId: sync.user?.id, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}) };
+    const input = { requestId: task.requestId, userId: sync.user?.id, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}), ...(task.pluginIds?.length ? { pluginIds: task.pluginIds } : {}) };
     const until = Date.now() + 15000;
     while (sync.pending || sync.busy) {
       if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
@@ -234,14 +247,20 @@ async function performChat(taskId) {
       if (sync.pending || sync.busy) await new Promise(resolve => setTimeout(resolve, 150));
     }
     if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
-    const result = await sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(140000) });
+    let result = await sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(140000) });
     if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
-    mutate(next => finishChat(next, taskId, result));
-    if (result.finishReason === 'length') toast('回复达到长度上限，可以发送“请继续”。');
+    if (task.pluginIds?.length) {
+      result = await waitPluginRun(result, accountCycle);
+      if (!result || accountCycle !== chatAccountCycle) return;
+      acceptPluginReply(taskId, result);
+    } else {
+      mutate(next => finishChat(next, taskId, result));
+      if (result.finishReason === 'length') toast('回复达到长度上限，可以发送“请继续”。');
+    }
   } catch (error) {
     if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     const message = error.name === 'TimeoutError' ? '等待回复超时，请检查服务端后重新请求。' : error.message;
-    mutate(next => { const item = next.tasks.find(item => item.id === taskId); if (item) { item.status = 'failed'; item.error = message.slice(0, 500); } });
+    mutate(next => { const item = next.tasks.find(item => item.id === taskId); if (item) { item.status = item.pluginIds?.length && ![400, 403, 404, 409, 413, 422].includes(error.status) ? 'pending' : 'failed'; item.error = message.slice(0, 500); } });
     toast(message, true);
   } finally { if (accountCycle === chatAccountCycle) { chatPending = null; render(); } }
 }
@@ -311,7 +330,7 @@ function composer(home = false) {
   return `<form class="composer" id="message-form" data-draft="${e(key)}">
     ${home ? `<label class="composer-label" for="message-input">${icon("spark")}今天，想一起完成什么？</label>` : '<label class="visually-hidden" for="message-input">输入消息</label>'}
     <textarea id="message-input" name="message" maxlength="20000" required placeholder="${home ? "写下你的想法，或者从下方选择一个灵感起点…" : "输入你的问题，继续这段思考…"}">${e(drafts.get(key) || "")}</textarea>
-    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}<select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select><select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select></div><button type="submit" class="btn btn-primary" ${chatPending || !activeModel().ready ? 'disabled' : ''}>${chatPending ? '正在回复…' : home ? '开始对话' : '发送'}${icon("arrow")}</button></div>
+    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}${button("plugin-picker", '<span data-plugin-choice-label>' + (selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件") + "</span>", "puzzle", "composer-plugin" + (selectedPluginIds.size ? " active" : ""), sync?.authenticated ? "" : "disabled")}<select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select><select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select></div><button type="submit" class="btn btn-primary" ${chatPending || !activeModel().ready || (!home && hasPluginApproval()) ? 'disabled' : ''}>${chatPending ? '正在回复…' : home ? '开始对话' : '发送'}${icon("arrow")}</button></div>
   </form>`;
 }
 function promptCard(p) {
@@ -460,16 +479,120 @@ function todoPage() {
     <div class="toolbar todo-toolbar"><div id="todo-tabs">${tabs(["全部", "待完成", "已完成"], todoFilter, "todo-filter")}</div>${searchField("todo-search", "搜索任务名称或备注…", todoQuery)}</div>
     <div id="todo-results" aria-live="polite">${todoResults()}</div>`;
 }
-function pluginsPage() {
-  const enabled = enabledToolIds(state);
-  return heading("插件", "常用工具，按需启用。") +
-    `<div class="plugins-summary"><span>内置工具</span><small>已启用 ${enabled.length} / ${BUILTIN_TOOLS.length}</small></div>
-    <div class="plugin-grid">${BUILTIN_TOOLS.map(tool => {
-      const active = enabled.includes(tool.id);
-      return `<article class="plugin-card" data-tool-id="${tool.id}"><div class="plugin-card-top"><span class="tile-icon tone-${tool.tone}">${icon(tool.icon)}</span>${button("toggle-tool", `<span class="tool-switch-track"><span></span></span><span>${active ? "已启用" : "已停用"}</span>`, "", "tool-switch", `data-id="${tool.id}" role="switch" aria-label="${e(tool.title)}" aria-checked="${active}"`)}</div>
-        <h2>${e(tool.title)}</h2><p>${e(tool.description)}</p><div class="plugin-card-bottom"><span>内置工具</span>${button("use-tool", "使用工具", "arrow", "btn", `data-id="${tool.id}" ${active ? "" : "disabled"}`)}</div></article>`;
-    }).join("")}</div><p class="plugins-note">工具启用偏好随当前账号保存。</p>`;
+function pluginReady(connection) {
+  return Boolean(connection.enabled && connection.status === "connected" && connection.selectedCount > 0);
 }
+async function refreshPlugins(force = false) {
+  if (!sync?.authenticated || pluginLoading || !force && Date.now() - pluginChecked < 15000) return;
+  const cycle = chatAccountCycle;
+  pluginLoading = true;
+  pluginChecked = Date.now();
+  try {
+    const data = await sync.request("/api/plugins");
+    if (cycle !== chatAccountCycle || !sync.authenticated) return;
+    if (!Array.isArray(data.connections) || data.connections.length > 8 || !Array.isArray(data.history)) throw new Error("插件列表响应无效。");
+    const changed = JSON.stringify([pluginConnections, pluginHistory, pluginError]) !== JSON.stringify([data.connections, data.history, ""]);
+    pluginConnections = data.connections;
+    pluginHistory = data.history;
+    pluginError = "";
+    pluginsLoaded = true;
+    for (const id of selectedPluginIds) if (!pluginConnections.some(connection => connection.id === id && pluginReady(connection))) selectedPluginIds.delete(id);
+    document.querySelectorAll("[data-plugin-choice-label]").forEach(element => { element.textContent = selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件"; });
+    if (changed && route().page === "plugins") { if (dialog.open || chatPending) pluginViewDirty = true; else render(); }
+  } catch (error) {
+    if (cycle !== chatAccountCycle) return;
+    pluginError = error.status === 404 ? "当前服务端还没有插件接口，请先更新工作台前后端。" : error.message;
+    pluginsLoaded = true;
+    if (route().page === "plugins" && !dialog.open && !chatPending) render();
+  } finally { if (cycle === chatAccountCycle) { pluginLoading = false; pluginChecked = Date.now(); } }
+}
+async function pluginRequest(endpoint, data = {}) {
+  if (!sync?.authenticated || sync.mode !== "server") throw new Error("请先连接并登录工作台服务。");
+  const cycle = chatAccountCycle, userId = sync.user?.id;
+  const result = await sync.request(endpoint, { method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ ...data, userId }), signal: AbortSignal.timeout(120000) });
+  return cycle === chatAccountCycle && sync.authenticated ? result : null;
+}
+function pluginsPage() {
+  const usable = sync?.mode === "server" && sync.authenticated;
+  const disabled = usable && pluginsLoaded && !pluginError ? "" : "disabled";
+  const connected = pluginConnections.filter(connection => connection.status === "connected" && connection.enabled).length;
+  const content = pluginConnections.length ? '<div class="plugin-connections">' + pluginConnections.map(connection => {
+    const ready = pluginReady(connection);
+    return `<article class="plugin-connection" data-plugin-id="${e(connection.id)}"><div class="plugin-connection-head"><span class="tile-icon tone-purple">${icon(connection.kind === "github" ? "code" : "puzzle")}</span>
+      <div><h3>${e(connection.name)}</h3><p>${e(connection.endpoint)}</p></div><span class="plugin-state ${connection.status === "connected" && connection.enabled ? "is-connected" : ""}">${!connection.enabled ? "已停用" : connection.status === "connected" ? "已连接" : "连接异常"}</span></div>
+      <p class="plugin-connection-summary">${connection.toolCount} 项可用工具 · ${connection.selectedCount} 项用于对话</p>
+      ${connection.error ? `<p class="plugin-error">${e(connection.error)}</p>` : ""}
+      <div class="plugin-connection-actions">${button("plugin-use-chat", "在对话中使用", "chat", "btn btn-primary", `data-id="${e(connection.id)}" ${ready ? "" : "disabled"}`)}
+        ${button("plugin-details", "查看工具", "list", "btn", `data-id="${e(connection.id)}"`)}
+        ${button("plugin-enable", connection.enabled ? "停用" : "启用", "", "btn btn-quiet", `data-id="${e(connection.id)}"`)}
+        ${iconButton("plugin-reconnect", "重新验证：" + connection.name, "refresh", `data-id="${e(connection.id)}"`)}
+        ${iconButton("plugin-disconnect", "断开连接：" + connection.name, "close", `data-id="${e(connection.id)}"`)}</div></article>`;
+  }).join("") + "</div>" : empty("puzzle", !pluginsLoaded && usable ? "正在读取插件连接" : "还没有连接插件",
+    usable ? "连接 GitHub 或其他 MCP 服务，将真实工具带入工作。" : "插件连接需要工作台服务，请先连接并登录。");
+  const history = pluginHistory.length ? `<section class="plugin-recent"><div class="section-heading"><h2>最近调用</h2><span class="caption">当前账号的实际执行记录</span></div>
+    <div class="plugin-history-list">${pluginHistory.map(call => `<div><span><strong>${e(call.pluginName)}</strong><small>${e(call.toolName)}</small></span><span>${({success:"已完成",error:"请求失败",unknown:"结果未确认",running:"执行中"})[call.status] || "已记录"}</span><time>${dateText(call.createdAt, true)}</time></div>`).join("")}</div></section>` : "";
+  return heading("插件", "连接你的工具，让对话真正完成工作。", button("plugin-connect", "连接插件", "plus", "btn btn-primary", disabled)) +
+    `<div class="plugins-summary"><span>我的连接</span><div><small>已连接 ${connected} / ${pluginConnections.length}</small>${button("plugins-refresh", "刷新", "refresh", "btn btn-quiet", usable ? "" : "disabled")}</div></div>
+    ${pluginError ? notice(e(pluginError)) : ""}${content}
+    <section class="plugin-discover"><div class="section-heading"><h2>连接更多工具</h2><span class="caption">通过 MCP 接入外部服务</span></div><div class="plugin-catalog">
+      <article class="plugin-catalog-card"><span class="tile-icon tone-purple">${icon("code")}</span><h3>GitHub</h3><p>读取仓库、查阅代码、协作处理 Issue 与 Pull Request，具体能力取决于账号权限。</p><div><span>GitHub 官方 MCP</span>${button("plugin-connect-github", "连接 GitHub", "arrow", "btn", disabled)}</div></article>
+      <article class="plugin-catalog-card"><span class="tile-icon tone-blue">${icon("puzzle")}</span><h3>自定义 MCP</h3><p>连接其他提供远程 MCP 接口的工具，发现它们实际开放的操作。</p><div><span>HTTPS · Streamable HTTP</span>${button("plugin-connect", "添加服务", "plus", "btn", disabled)}</div></article>
+    </div></section>${history}`;
+}
+function pluginConnector(kind = "custom") {
+  if (!sync?.authenticated || sync.mode !== "server") throw new Error("请先连接并登录工作台服务。");
+  const github = kind === "github";
+  openDialog(github ? "连接 GitHub" : "连接 MCP 插件",
+    `<form id="plugin-connect-form" class="dialog-body" data-kind="${github ? "github" : "custom"}"><label>连接名称<input class="input" name="name" maxlength="80" required value="${github ? "GitHub" : ""}" placeholder="给这个连接取个名字" /></label>
+    <label>MCP 服务地址<input class="input" name="endpoint" type="url" maxlength="2000" required value="${github ? "https://api.githubcopilot.com/mcp/" : ""}" ${github ? "readonly" : ""} placeholder="https://你的服务地址/mcp" /></label>
+    ${github ? '<input type="hidden" name="authMode" value="bearer" />' : '<label>授权方式<select class="input" name="authMode" id="plugin-auth-mode"><option value="none">无需令牌</option><option value="bearer">Bearer 令牌</option></select></label>'}
+    <label id="plugin-token-label" ${github ? "" : "hidden"}>${github ? "GitHub 个人访问令牌" : "授权令牌"}<input class="input" name="token" type="password" maxlength="4096" autocomplete="off" spellcheck="false" data-plugin-secret ${github ? "required" : ""} placeholder="仅在连接时填写，不在页面回显" /></label>
+    <p class="field-help">凭据加密保存在本机服务端，按工作台账号隔离，不包含在工作空间 JSON 备份中。</p>
+    ${github ? '<p class="plugin-auth-help"><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">打开 GitHub 令牌设置</a>，选择需要协作的仓库和权限。每次工具执行前会展示具体操作供你确认。</p>' : '<p class="plugin-auth-help">填写远程 MCP 的最终 HTTPS 地址，支持无需授权或 Bearer 令牌的 Streamable HTTP 服务。</p>'}
+    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">连接并验证</button></div></form>`);
+}
+async function pluginDetails(id) {
+  const cycle = chatAccountCycle;
+  const connection = await sync.request("/api/plugins/" + encodeURIComponent(id));
+  if (cycle !== chatAccountCycle) return;
+  pluginDetailsCache.set(id, connection);
+  const selected = new Set(connection.selectedTools);
+  openDialog(connection.name + " · 可用工具",
+    `<form id="plugin-tools-form" class="dialog-body" data-id="${e(id)}" data-revision="${connection.revision}"><p>选择允许模型在对话中请求的工具，最多 40 项。实际执行仍需确认。</p>
+    <div class="plugin-tool-list">${connection.tools.map(tool => `<article class="plugin-tool-row" data-tool-name="${e(tool.name)}"><label><input type="checkbox" name="tools" value="${e(tool.name)}" ${selected.has(tool.name) ? "checked" : ""} /><span><strong>${e(tool.title || tool.name)}</strong><code>${e(tool.name)}</code><small>${e(tool.description)}</small></span></label>
+      ${button("plugin-tool-open", "执行工具", "arrow", "btn", `data-id="${e(id)}" data-tool="${e(tool.name)}" ${connection.enabled && connection.status === "connected" ? "" : "disabled"}`)}</article>`).join("") || empty("puzzle", "暂无可用工具", "此服务暂未开放工具，请检查权限后重新验证连接。")}</div>
+    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}<button class="btn btn-primary" type="submit">保存对话工具</button></div></form>`, "plugin-tools-dialog");
+}
+function toolExample(schema) {
+  const result = Object.create(null);
+  for (const name of (schema.required || []).slice(0, 15)) {
+    const property = schema.properties?.[name] || {};
+    result[name] = property.default ?? property.enum?.[0] ?? ({ string: "", integer: 0, number: 0, boolean: false, array: [], object: {} }[property.type] ?? "");
+  }
+  return JSON.stringify(result, null, 2);
+}
+function pluginToolEditor(id, name) {
+  const connection = pluginDetailsCache.get(id), tool = connection?.tools.find(tool => tool.name === name);
+  if (!connection || !tool) throw new Error("请先打开插件工具列表。");
+  openDialog(connection.name + " · " + (tool.title || tool.name),
+    `<form id="plugin-call-form" class="dialog-body" data-id="${e(id)}" data-tool="${e(name)}" data-revision="${connection.revision}" data-request-id="${uid("invoke")}"><p>${e(tool.description)}</p>
+    <details class="plugin-schema"><summary>查看参数说明</summary><pre>${e(JSON.stringify(tool.inputSchema, null, 2))}</pre></details>
+    <label>工具参数（JSON）<textarea class="input plugin-arguments" id="plugin-call-args" name="arguments" maxlength="40000" required spellcheck="false">${e(toolExample(tool.inputSchema))}</textarea></label>
+    <p class="field-help">点击“执行工具”后，这些参数会发送至 ${e(new URL(connection.endpoint).origin)}。</p>
+    <p class="dialog-error" id="form-error" role="alert"></p><div id="plugin-call-result" aria-live="polite"></div>
+    <div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}${button("plugin-new-call", "准备新调用", "plus", "btn", "hidden data-new-call")}<button class="btn btn-primary" type="submit">执行工具</button></div></form>`);
+}
+async function pluginPicker() {
+  await refreshPlugins(true);
+  const connections = pluginConnections.filter(pluginReady);
+  openDialog("选择对话插件",
+    `<form id="plugin-picker-form" class="dialog-body"><p>本次发送的请求可使用所选服务。模型提出工具操作后，会先展示名称和参数供你确认。</p>
+    ${connections.length ? `<div class="plugin-picker-list">${connections.map(connection => `<label><input type="checkbox" name="plugins" value="${e(connection.id)}" ${selectedPluginIds.has(connection.id) ? "checked" : ""} /><span><strong>${e(connection.name)}</strong><small>${connection.selectedCount} 项工具可用于对话</small></span></label>`).join("")}</div>` : empty("puzzle", "还没有可用于对话的插件", "先连接插件并选择对话工具。", '<a class="btn" href="#plugins">前往连接插件</a>')}
+    ${modelConfig.toolCalling !== true ? notice("当前模型服务端尚未提供对话工具调用能力，请先更新服务端；插件页仍可独立执行工具。") : ""}
+    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">确认选择</button></div></form>`);
+}
+
 function todoEditor(id = "") {
   const todo = (state.todos || []).find(item => item.id === id);
   if (id && !todo) throw new Error("任务已不存在，请刷新后重试。");
@@ -478,18 +601,119 @@ function todoEditor(id = "") {
     <label>备注<textarea class="input" name="notes" maxlength="2000" placeholder="补充任务背景或具体步骤（选填）">${e(todo?.notes || "")}</textarea></label>
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存任务</button></div></form>`);
 }
-function textStatResults(text) {
-  const summary = summarizeText(text);
-  return [["characters", "字符"], ["nonWhitespace", "非空字符"], ["lines", "行"], ["paragraphs", "段落"]]
-    .map(([key, label]) => `<div><strong data-stat="${key}">${summary[key]}</strong><span>${label}</span></div>`).join("");
+async function handlePluginForm(form, data) {
+  const cycle = chatAccountCycle, submit = form.querySelector('button[type="submit"]');
+  const label = submit?.textContent;
+  if (submit) { submit.disabled = true; submit.textContent = "正在处理…"; }
+  try {
+    if (form.id === "plugin-connect-form") {
+      const value = await pluginRequest("/api/plugins/connect", { kind: form.dataset.kind,
+        name: String(data.get("name")), endpoint: String(data.get("endpoint")),
+        authMode: String(data.get("authMode")), token: String(data.get("token") || "") });
+      form.querySelector("[data-plugin-secret]").value = "";
+      if (!value || cycle !== chatAccountCycle) return;
+      await refreshPlugins(true);
+      closeDialog();
+      toast("已连接 " + value.name + "，发现 " + value.toolCount + " 项工具");
+    } else if (form.id === "plugin-tools-form") {
+      const value = await pluginRequest("/api/plugins/" + form.dataset.id + "/configure", {
+        revision: Number(form.dataset.revision), selectedTools: data.getAll("tools").map(String) });
+      if (!value || cycle !== chatAccountCycle) return;
+      pluginDetailsCache.delete(form.dataset.id);
+      await refreshPlugins(true);
+      closeDialog();
+      toast("对话工具选择已保存");
+    } else if (form.id === "plugin-picker-form") {
+      const ids = data.getAll("plugins").map(String);
+      if (ids.length > 4 || ids.some(id => !pluginConnections.some(connection => connection.id === id && pluginReady(connection))))
+        throw new Error("请选择最多 4 个可用插件。");
+      selectedPluginIds.clear();
+      ids.forEach(id => selectedPluginIds.add(id));
+      closeDialog();
+      render();
+      document.querySelector("#message-input")?.focus();
+    } else if (form.id === "plugin-call-form") {
+      let args;
+      try { args = JSON.parse(String(data.get("arguments"))); } catch { throw new Error("请输入有效的 JSON 参数。"); }
+      if (!args || typeof args !== "object" || Array.isArray(args)) throw new Error("工具参数必须是 JSON 对象。");
+      form.dataset.sent = "true";
+      form.querySelector("#plugin-call-args").readOnly = true;
+      const value = await pluginRequest("/api/plugins/" + form.dataset.id + "/call", {
+        toolName: form.dataset.tool, arguments: args, revision: Number(form.dataset.revision), requestId: form.dataset.requestId });
+      if (!value || cycle !== chatAccountCycle) return;
+      const status = ({ success: "工具执行完成", error: "工具请求失败", unknown: "操作结果未确认", running: "操作仍在执行" })[value.status] || "已记录调用";
+      form.querySelector("#plugin-call-result").innerHTML = `<section class="plugin-result" data-call-status="${e(value.status)}"><h3>${status}</h3>
+        ${value.error ? `<p>${e(value.error)}</p>` : ""}${value.result ? `<pre>${e(JSON.stringify(value.result, null, 2))}</pre>` : ""}
+        ${value.status === "unknown" ? "<p>请先核对远端状态，再决定是否发起新的调用。</p>" : ""}</section>`;
+      form.dataset.finished = "true";
+      form.querySelector("[data-new-call]").hidden = false;
+      await refreshPlugins(true);
+    }
+  } finally {
+    if (submit?.isConnected) {
+      submit.disabled = form.dataset.finished === "true";
+      submit.textContent = form.dataset.sent === "true" && form.dataset.finished !== "true" ? "恢复结果" : label;
+    }
+  }
 }
-function useTool(id) {
-  if (!enabledToolIds(state).includes(id)) throw new Error("请先启用此工具。");
-  if (id === "workspace-search") showSearch();
-  else if (id === "text-stats") openDialog("文本统计",
-    `<div class="dialog-body"><label for="tool-text">待统计文本<textarea id="tool-text" class="input" maxlength="50000" placeholder="在这里输入或粘贴文本…" autofocus></textarea></label><div class="text-stat-results" id="text-stat-results" aria-live="polite">${textStatResults("")}</div></div>`);
-  else if (id === "data-export") openDialog("数据导出",
-    `<div class="dialog-body"><p>导出当前账号的全部工作空间内容，保存为 JSON 备份。</p><ul class="export-summary"><li>${(state.todos || []).length} 项任务</li><li>${state.sessions.length} 段对话</li><li>${state.prompts.length} 个提示词</li><li>${state.documents.length} 份资料</li></ul><p class="field-help">备份包含插件偏好，可在设置的“本地数据”中恢复。</p><div class="dialog-actions">${button("export-all", "导出 JSON 备份", "download", "btn btn-primary")}</div></div>`);
+function pluginApprovalView(taskId, approval) {
+  return `<section class="plugin-approval" aria-label="确认插件操作"><div class="plugin-approval-title">${icon("puzzle")}<strong>确认使用插件</strong></div>
+    <p>确认后，将以下参数发送给对应服务并执行工具。</p>
+    ${approval.calls.map(call => `<details class="plugin-plan" open><summary>${e(call.pluginName)} · ${e(call.name)}</summary><small>${e(call.endpoint)}</small><pre>${e(JSON.stringify(call.arguments, null, 2))}</pre></details>`).join("")}
+    <div class="plugin-approval-actions">${button("plugin-approve", "确认并执行", "check", "btn btn-primary", `data-id="${e(taskId)}"`)}
+      ${button("plugin-reject", "取消操作", "", "btn", `data-id="${e(taskId)}"`)}</div></section>`;
+}
+function acceptPluginReply(taskId, result) {
+  if (result.approval) {
+    if (!Array.isArray(result.approval.calls) || !result.approval.calls.length || result.approval.calls.length > 4)
+      throw new Error("插件确认信息无效，未执行操作。");
+    pluginApprovals.set(taskId, result.approval);
+    return;
+  }
+  pluginApprovals.delete(taskId);
+  if (result.cancelled || result.interrupted) {
+    mutate(next => {
+      const task = next.tasks.find(task => task.id === taskId);
+      if (task) { task.status = "failed"; task.error = String(result.message).slice(0, 500); task.pluginUncertain = Boolean(result.interrupted); }
+    });
+    return;
+  }
+  mutate(next => finishChat(next, taskId, result));
+  if (result.finishReason === "length") toast("回复达到长度上限，可以发送“请继续”。");
+}
+async function waitPluginRun(value, cycle) {
+  const until = Date.now() + 300000;
+  while (value.processing) {
+    if (cycle !== chatAccountCycle || !sync.authenticated) return null;
+    if (typeof value.runId !== "string" || !/^agent_[a-f0-9]{32}$/.test(value.runId)) throw new Error("插件任务状态无效。");
+    if (Date.now() > until) throw new Error("插件任务仍在处理，请恢复回复核对结果。");
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    value = await sync.request("/api/plugin-runs/" + encodeURIComponent(value.runId));
+  }
+  return value;
+}
+async function answerPluginApproval(taskId, approve) {
+  const approval = pluginApprovals.get(taskId), task = state.tasks.find(task => task.id === taskId);
+  if (!approval || !task || chatPending) throw new Error("请先恢复当前插件任务状态。");
+  const cycle = chatAccountCycle;
+  chatPending = { taskId, sessionId: task.sessionId, pluginPhase: "executing" };
+  render();
+  try {
+    const started = await pluginRequest("/api/plugin-runs/" + approval.runId + "/decide", { approvalId: approval.approvalId, approve });
+    if (!started || cycle !== chatAccountCycle) return;
+    const result = await waitPluginRun(started, cycle);
+    if (!result || cycle !== chatAccountCycle) return;
+    acceptPluginReply(taskId, result);
+    await refreshPlugins(true);
+  } catch (error) {
+    if (cycle !== chatAccountCycle) return;
+    pluginApprovals.delete(taskId);
+    mutate(next => {
+      const record = next.tasks.find(task => task.id === taskId);
+      if (record) { record.status = "pending"; record.error = "请恢复回复核对插件结果：" + error.message.slice(0, 350); }
+    });
+    toast(error.message, true);
+  } finally { if (cycle === chatAccountCycle) { chatPending = null; render(); } }
 }
 
 function historyResults() {
@@ -626,9 +850,14 @@ function openDialog(title, content, className = "") {
   if (!dialog.open) dialog.showModal();
 }
 function closeDialog() {
+  dialog.querySelectorAll("[data-plugin-secret]").forEach(input => { input.value = ""; });
   dialog.close();
   confirmAction = null;
-  if (dialogOrigin?.isConnected) dialogOrigin.focus();
+  if (pluginViewDirty && route().page === "plugins") {
+    pluginViewDirty = false;
+    render();
+    document.querySelector("#page-title")?.focus();
+  } else if (dialogOrigin?.isConnected) dialogOrigin.focus();
 }
 function confirmDialog(title, description, label, fn) {
   confirmAction = fn;
@@ -872,16 +1101,85 @@ async function handleAction(target) {
       render();
       document.querySelector('#todo-tabs [data-id="' + id + '"]')?.focus();
       break;
-    case "toggle-tool": {
-      const enabled = !enabledToolIds(state).includes(id);
-      mutate(next => setToolEnabled(next, id, enabled));
+    case "plugins-refresh":
+      await refreshPlugins(true);
       render();
-      document.querySelector('[data-action="toggle-tool"][data-id="' + id + '"]')?.focus();
-      toast(enabled ? "工具已启用" : "工具已停用");
+      break;
+    case "plugin-connect":
+      pluginConnector("custom");
+      break;
+    case "plugin-connect-github":
+      pluginConnector("github");
+      break;
+    case "plugin-details":
+      await pluginDetails(id);
+      break;
+    case "plugin-tool-open":
+      pluginToolEditor(id, target.dataset.tool);
+      break;
+    case "plugin-picker":
+      await pluginPicker();
+      break;
+    case "plugin-use-chat": {
+      const connection = pluginConnections.find(connection => connection.id === id);
+      if (!connection || !pluginReady(connection)) throw new Error("请先连接并启用此插件。");
+      if (selectedPluginIds.size >= 4 && !selectedPluginIds.has(id)) throw new Error("最多同时选择 4 个对话插件。");
+      selectedPluginIds.add(id);
+      focusNewConversation = true;
+      go("chat");
       break;
     }
-    case "use-tool":
-      useTool(id);
+    case "plugin-enable": {
+      const connection = pluginConnections.find(connection => connection.id === id);
+      if (!connection) break;
+      const value = await pluginRequest("/api/plugins/" + id + "/configure", { revision: connection.revision, enabled: !connection.enabled });
+      if (!value) break;
+      await refreshPlugins(true);
+      render();
+      break;
+    }
+    case "plugin-reconnect": {
+      const value = await pluginRequest("/api/plugins/" + id + "/refresh");
+      if (!value) break;
+      pluginDetailsCache.delete(id);
+      await refreshPlugins(true);
+      render();
+      toast("已重新验证插件连接");
+      break;
+    }
+    case "plugin-disconnect": {
+      const connection = pluginConnections.find(connection => connection.id === id);
+      if (!connection) break;
+      confirmDialog("断开插件连接？", "将移除“" + connection.name + "”的本机连接与保存的凭据，保留历史调用记录。", "断开连接", async () => {
+        const value = await pluginRequest("/api/plugins/" + id + "/disconnect");
+        if (!value) return;
+        selectedPluginIds.delete(id);
+        pluginDetailsCache.delete(id);
+        await refreshPlugins(true);
+        toast("插件连接已断开");
+      });
+      break;
+    }
+    case "plugin-new-call": {
+      const form = document.querySelector("#plugin-call-form");
+      if (!form) break;
+      form.dataset.requestId = uid("invoke");
+      delete form.dataset.sent;
+      delete form.dataset.finished;
+      form.querySelector("#plugin-call-args").readOnly = false;
+      form.querySelector("#plugin-call-result").innerHTML = "";
+      form.querySelector("#form-error").textContent = "";
+      form.querySelector('button[type="submit"]').disabled = false;
+      form.querySelector('button[type="submit"]').textContent = "执行工具";
+      form.querySelector("[data-new-call]").hidden = true;
+      form.querySelector("#plugin-call-args").focus();
+      break;
+    }
+    case "plugin-approve":
+      await answerPluginApproval(id, true);
+      break;
+    case "plugin-reject":
+      await answerPluginApproval(id, false);
       break;
     case "new-document":
       closeDialog();
@@ -976,7 +1274,7 @@ async function handleAction(target) {
       if (!user) break;
       const taskId = mutate(next => {
         if (next.tasks.length >= 1000) throw new Error('对话请求记录已达上限，请先清理历史。');
-        const task = { id: uid('task'), requestId: uid('request'), assistant: next.settings.model, ...(next.settings.modelKey ? { modelKey: next.settings.modelKey } : {}), userMessageId: user.id, replaceMessageId: id, sessionId: session.id,
+        const task = { id: uid('task'), requestId: uid('request'), assistant: next.settings.model, ...(next.settings.modelKey ? { modelKey: next.settings.modelKey } : {}), ...(selectedPluginIds.size ? { pluginIds: [...selectedPluginIds] } : {}), userMessageId: user.id, replaceMessageId: id, sessionId: session.id,
           title: user.content.slice(0, 60), type: '重新生成', status: 'pending', createdAt: new Date().toISOString() };
         next.tasks.unshift(task); return task.id;
       });
@@ -989,7 +1287,7 @@ async function handleAction(target) {
         const task = next.tasks.find(item => item.id === id);
         if (!task) throw new Error('请求记录不存在。');
         if (action === 'retry-chat') { task.requestId = uid('request'); if (next.settings.modelKey) task.modelKey = next.settings.modelKey; else delete task.modelKey; }
-        task.status = 'pending'; delete task.error;
+        task.status = 'pending'; delete task.error; delete task.pluginUncertain;
       });
       await performChat(id); break;
     }
@@ -1118,7 +1416,7 @@ async function handleAction(target) {
     case "help":
       openDialog(
         "欢迎使用智作台",
-        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办并标记完成；在插件中启用搜索、文本统计和数据导出。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
+        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办；在插件中连接外部服务，选择对话工具并确认具体操作。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
       );
       break;
   }
@@ -1129,13 +1427,15 @@ document.addEventListener("click", (event) => {
   if (target) handleAction(target).catch((error) => toast(error.message, true));
   if (event.target.closest(".sidebar a") && mobile.matches) setMenu(false, false);
 });
-document.addEventListener("submit", (event) => {
+document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!["message-form", "prompt-form", "tag-form", "todo-form"].includes(form.id)) return;
+  if (!["message-form", "prompt-form", "tag-form", "todo-form", "plugin-connect-form", "plugin-tools-form", "plugin-picker-form", "plugin-call-form"].includes(form.id)) return;
   event.preventDefault();
   const data = new FormData(form);
   try {
-    if (form.id === "message-form") {
+    if (form.id.startsWith("plugin-")) {
+      await handlePluginForm(form, data);
+    } else if (form.id === "message-form") {
       sendChat(String(data.get('message')), form.dataset.draft).catch(error => toast(error.message, true));
     } else if (form.id === "todo-form") {
       mutate(next => saveTodo(next, form.dataset.id, { title: String(data.get("title")), notes: String(data.get("notes")) }));
@@ -1205,7 +1505,6 @@ document.addEventListener("input", (event) => {
     todoQuery = value;
     document.querySelector("#todo-results").innerHTML = todoResults();
   }
-  if (id === "tool-text") document.querySelector("#text-stat-results").innerHTML = textStatResults(value);
   if (id === "global-search") updateSearch(value);
   if (id === "message-input")
     drafts.set(event.target.form.dataset.draft, value);
@@ -1213,6 +1512,12 @@ document.addEventListener("input", (event) => {
 document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
+    if (target.id === "plugin-auth-mode") {
+      const token = document.querySelector('#plugin-connect-form [name="token"]');
+      token.required = target.value === "bearer";
+      document.querySelector("#plugin-token-label").hidden = !token.required;
+      if (!token.required) token.value = "";
+    }
     if (target.dataset.setting === 'modelKey') {
       if (target.value && !(modelConfig.models || []).some(model => model.key === target.value)) throw new Error('此模型不可用，请刷新后重新选择。');
       mutate(next => { next.settings.modelKey = target.value; });
@@ -1347,6 +1652,8 @@ if (initial.warning) toast(initial.warning, true);
 function clearAccountView() {
   chatAccountCycle++;
   chatPending = null;
+  pluginConnections = []; pluginHistory = []; pluginError = ""; pluginsLoaded = false; pluginLoading = false; pluginChecked = 0; pluginViewDirty = false;
+  selectedPluginIds.clear(); pluginDetailsCache.clear(); pluginApprovals.clear();
   focusNewConversation = false;
   modelConfigPending = false;
   modelConfigChecked = 0;
@@ -1371,7 +1678,7 @@ sync = new WorkspaceSync({
   },
   onNotice: toast,
   canChangeAccount: action => !dialog.open && ![...drafts.values()].some(value => value.trim()) && (action !== "add-account" || !chatPending),
-  onStatus() { refreshModelConfig(); },
+  onStatus() { refreshModelConfig(); refreshPlugins(); },
   canApply: () => !chatPending && !dialog.open && !document.activeElement?.matches("input, textarea, select"),
   canReload: () => !chatPending && !dialog.open && ![...drafts.values()].some(value => value.trim()) && !document.activeElement?.matches("input, textarea, select"),
   onVersion(version) {

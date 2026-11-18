@@ -1,15 +1,17 @@
 import { HttpError } from "./store.js";
+import { PluginService } from "./plugins.js";
+import { PluginAgent } from "./plugin-agent.js";
 
 const cookieToken = (request) => request.headers.cookie?.match(/(?:^|;\s*)wqs_session=([a-f0-9]{64})(?:;|$)/)?.[1] || "";
 const limit = 16 * 1024 * 1024;
-function readJson(request) {
+function readJson(request, maximum = limit) {
   if (!/^application\/json(?:;|$)/i.test(request.headers["content-type"] || "")) throw new HttpError(415, "json_required", "请使用 JSON 请求。");
   return new Promise((resolve, reject) => {
     let size = 0, rejected = false;
     const chunks = [];
     request.on("data", chunk => {
       size += chunk.length;
-      if (size > limit) { if (!rejected) reject(new HttpError(413, "body_too_large", "工作空间超过 16 MB，请先导出并减少资料。")); rejected = true; return; }
+      if (size > maximum) { if (!rejected) reject(new HttpError(413, "body_too_large", maximum === limit ? "工作空间超过 16 MB，请先导出并减少资料。" : "插件请求内容过大。")); rejected = true; return; }
       if (!rejected) chunks.push(chunk);
     });
     request.on("end", () => { if (rejected) return; try { const body = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("object required"); resolve(body); } catch { reject(new HttpError(400, "invalid_json", "JSON 格式无效。")); } });
@@ -17,7 +19,7 @@ function readJson(request) {
   });
 }
 
-export function createApi(store, version, modelClient) {
+export function createApi(store, version, modelClient, { plugins = new PluginService(store), agent = new PluginAgent(store, plugins, modelClient) } = {}) {
   const attempts = new Map();
   return async (request, response, pathname, json) => {
     if (!pathname.startsWith("/api/")) return false;
@@ -73,14 +75,57 @@ export function createApi(store, version, modelClient) {
       }
       if (pathname === "/api/logout" && method === "POST") { store.logout(token); setSession(""); json(200, { authenticated: false }); return true; }
       if (!authenticated) throw new HttpError(401, "authentication_required", "请先登录账号。");
+      const pluginBody = async () => {
+        const input = await readJson(request, 128_000);
+        if (input.userId !== user.id) throw new HttpError(401, "account_changed", "账号已切换，请重新登录。");
+        return input;
+      };
+      if (pathname === "/api/plugins" && readOnly) {
+        json(200, { connections: plugins.list(user.id), history: plugins.history(user.id) }); return true;
+      }
+      if (pathname === "/api/plugins/connect" && method === "POST") {
+        json(201, await plugins.connect(user.id, await pluginBody())); return true;
+      }
+      const pluginRoute = pathname.match(/^\/api\/plugins\/(plugin_[a-f0-9]{32})(?:\/(refresh|configure|disconnect|call))?$/);
+      if (pluginRoute) {
+        const [, id, action] = pluginRoute;
+        if (!action && readOnly) { json(200, plugins.detail(user.id, id)); return true; }
+        if (method === "POST" && action) {
+          const input = await pluginBody();
+          const value = action === "refresh" ? await plugins.refresh(user.id, id) :
+            action === "configure" ? plugins.configure(user.id, id, input) :
+            action === "disconnect" ? plugins.disconnect(user.id, id) :
+            await plugins.invoke(user.id, id, input.toolName, input.arguments, input.requestId, input.revision);
+          json(200, value); return true;
+        }
+      }
+      const runRoute = pathname.match(/^\/api\/plugin-runs\/(agent_[a-f0-9]{32})(?:\/(decide))?$/);
+      if (runRoute) {
+        const [, id, action] = runRoute;
+        if (!action && readOnly) { json(200, agent.state(agent.owned(user.id, id))); return true; }
+        if (action === "decide" && method === "POST") {
+          const operation = agent.decide(user.id, id, await pluginBody());
+          // Execution continues in the persisted run; the browser polls status,
+          // so slow external tools cannot force a duplicate POST after timeout.
+          operation.catch(() => {});
+          const completed = await Promise.race([operation, new Promise(resolve => setTimeout(() => resolve(null), 20))]);
+          json(200, completed || agent.state(agent.owned(user.id, id))); return true;
+        }
+      }
       if (pathname === "/api/model-config" && method === "GET") { json(200, await modelClient.config()); return true; }
       if (pathname === "/api/chat" && method === "POST") {
         if (Number(request.headers['content-length']) > 600_000) throw new HttpError(413, 'chat_too_large', '对话请求过大，请新建对话。');
         const input = await readJson(request);
         if (Buffer.byteLength(JSON.stringify(input)) > 600_000) throw new HttpError(413, 'chat_too_large', '对话请求过大，请新建对话。');
         if ((input.userId !== undefined && input.userId !== user.id) || (input.userId === undefined && !user.legacy)) throw new HttpError(401, "account_changed", "账号已切换，请重新登录。");
-        const { userId: _accountBinding, ...chat } = input;
-        json(200, await modelClient.chat(chat, user.legacy ? undefined : user.id)); return true;
+        if (input.tools !== undefined) throw new HttpError(400, "invalid_chat", "工具定义由服务端提供，请选择已连接插件。");
+        if (input.pluginIds !== undefined && (!Array.isArray(input.pluginIds) || input.pluginIds.length > 4 ||
+          new Set(input.pluginIds).size !== input.pluginIds.length || input.pluginIds.some(id => typeof id !== "string" || !/^plugin_[a-f0-9]{32}$/.test(id))))
+          throw new HttpError(400, "invalid_chat", "插件选择无效。");
+        const chat = { requestId: input.requestId, assistant: input.assistant, messages: input.messages,
+          ...(input.modelKey !== undefined ? { modelKey: input.modelKey } : {}),
+          ...(input.pluginIds?.length ? { pluginIds: input.pluginIds } : {}) };
+        json(200, input.pluginIds?.length ? await agent.start(user.id, chat) : await modelClient.chat(chat, user.legacy ? undefined : user.id)); return true;
       }
       if (pathname === "/api/workspace" && readOnly) { json(200, { ...store.read(user.id), userId: user.id }); return true; }
       if (pathname === "/api/workspace" && method === "PUT") {
