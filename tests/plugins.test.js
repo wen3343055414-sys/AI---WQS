@@ -135,7 +135,8 @@ test('corrupted encryption key marks persisted connections unavailable without d
   await writeFile(path.join(directory, 'plugins.key'), 'invalid-fixture-key');
   const restarted = new PluginService(store, { allowedLocal: [fixture.origin] });
   assert.equal(restarted.detail(owner.id, connection.id).status, 'error');
-  await assert.rejects(restarted.invoke(owner.id, connection.id, 'get_repository', {}, 'invoke_bad_key_fixture', connection.revision));
+  const result = await restarted.invoke(owner.id, connection.id, 'get_repository', {}, 'invoke_bad_key_fixture', connection.revision);
+  assert.equal(result.status, 'error');
   assert.equal(fixture.state.calls.length, 0);
   assert.ok(store.read(owner.id));
 });
