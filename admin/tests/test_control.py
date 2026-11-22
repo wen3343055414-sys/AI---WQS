@@ -105,6 +105,16 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(current["lastBackup"], "2026-11-02T01:00:00+00:00")
         self.assertEqual(current["sha"], self.current["sha"])
 
+    def test_update_reports_the_revision_that_actually_runs(self):
+        self.assertEqual(self.execute("update")["message"], "检查完成，当前运行 aaaaaaaaaaaa。")
+        self.service.update = lambda: self.service.current_path.write_text(
+            json.dumps({"sha": "b" * 40, "verification": "pending-admin"})
+        )
+        self.assertEqual(
+            self.execute("update")["message"],
+            "工作台已更新至 bbbbbbbbbbbb。管理服务正在切换。",
+        )
+
     def test_rollback_without_previous_version_does_not_modify_service(self):
         with self.assertRaisesRegex(RuntimeError, "上一运行版本"):
             self.execute("rollback")

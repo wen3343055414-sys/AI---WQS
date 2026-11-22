@@ -46,6 +46,7 @@ try {
   assert.equal(await form.locator('[name="endpoint"]').getAttribute('readonly'), '');
   assert.equal(await form.locator('[name="token"]').getAttribute('type'), 'password');
   assert.equal(await form.locator('a[href="https://github.com/settings/personal-access-tokens/new"]').count(), 1);
+  assert.equal(await form.locator('details').evaluate(node => node.open), false);
   await page.screenshot({ path: path.join(output, 'plugins-github-auth-desktop.png') });
   await page.getByRole('button', { name: '取消', exact: true }).click();
   await page.locator('.plugin-catalog-card').filter({ has: page.getByRole('heading', { name: '自定义 MCP', exact: true }) }).getByRole('button', { name: '添加服务' }).click();
@@ -137,8 +138,11 @@ try {
   assert.equal(await page.getByText('GitHub 协作联调', { exact: true }).count(), 0);
   assert.equal((await context.request.post(base + '/api/login', { data: { account: 'admin', password } })).status(), 200);
   await page.reload({ waitUntil: 'networkidle' }); await page.getByText('已连接', { exact: true }).waitFor();
-  await card.getByRole('button', { name: '断开连接：GitHub 协作联调', exact: true }).click();
-  await page.getByRole('button', { name: '断开连接', exact: true }).click();
+  const management = card.locator('details.row-actions');
+  await management.locator('summary').click();
+  await management.getByRole('button', { name: '断开连接', exact: true }).click();
+  assert.equal(await management.evaluate(node => node.open), false);
+  await page.locator('#dialog').getByRole('button', { name: '断开连接', exact: true }).click();
   await card.waitFor({ state: 'hidden' });
   assert.equal((await (await context.request.get(base + '/api/plugins')).json()).connections.length, 0);
   assert.deepEqual(errors, []);

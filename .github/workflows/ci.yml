@@ -82,6 +82,18 @@ jobs:
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/auth-ui-check.mjs
       - name: Verify real MCP connections and conversation tools
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/plugins-ui-check.mjs
+      - name: Verify management pages and responsive navigation
+        run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/admin-ui-check.mjs
+      - name: Capture representative screens for review
+        if: always()
+        run: |
+          node --input-type=module <<'JS'
+          import { readFileSync, existsSync } from 'node:fs';
+          for (const name of ['navigation-home-desktop', 'login-account-desktop', 'features-plugins-desktop', 'settings-account-desktop', 'admin-overview-desktop', 'admin-models-desktop', 'admin-access-desktop', 'admin-overview-mobile-320']) {
+            const file = 'artifacts/auth/' + name + '.png';
+            if (existsSync(file)) console.log('UI_PREVIEW:' + name + ':' + readFileSync(file).toString('base64'));
+          }
+          JS
       - name: Save login previews
         if: always()
         uses: actions/upload-artifact@v4

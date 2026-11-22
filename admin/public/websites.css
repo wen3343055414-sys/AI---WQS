@@ -137,3 +137,56 @@
 @media(max-width:1250px){#website-management .dm-access-card{padding:24px;gap:23px}#website-management .dm-access-title h2{font-size:21px}#website-management a.dm-primary-url{font-size:19px}#website-management .dm-access-buttons{flex-direction:column;width:155px}#website-management .dm-table th,#website-management .dm-table td{padding-left:17px;padding-right:17px}#website-management .dm-section-heading{padding:21px}#website-management .dm-search{max-width:190px}#website-management .dm-search input{width:110px}}
 @media(max-width:1000px){#website-management .dm-access-side{display:none}#website-management .dm-table{min-width:790px}#website-management .dm-section-heading{gap:16px;flex-wrap:wrap}#website-management .dm-toolbar{flex:1;justify-content:flex-end}#website-management .dm-tabs{gap:25px}#website-management .dm-deployment-title{flex-wrap:wrap}#website-management .dm-deployment-title>.dm-status{margin-left:0}}
 @media(max-width:600px){#app-view.domains-mode .page-heading{gap:15px}#app-view.domains-mode .page-heading h1{font-size:24px}#app-view.domains-mode .heading-actions .btn{font-size:10px}#website-management .dm-access-card{padding:19px 17px;margin-bottom:23px;border-radius:8px}#website-management .dm-eyebrow{font-size:9px;margin-bottom:11px}#website-management .dm-access-title{gap:9px}#website-management .dm-access-title h2{font-size:20px}#website-management .dm-access-main>p{font-size:11px;line-height:1.9}#website-management a.dm-primary-url{font-size:16px}#website-management .dm-access-notes{font-size:9px;gap:7px 13px}#website-management .dm-tabs{gap:22px;margin-bottom:19px}#website-management .dm-tabs>button{font-size:12px;gap:6px;padding-bottom:13px}#website-management .dm-tabs svg{width:15px;height:15px}#website-management .dm-section-heading{padding:18px 15px;align-items:flex-start;gap:15px}#website-management .dm-section-heading h2{font-size:16px}#website-management .dm-section-heading p{font-size:10px}#website-management .dm-toolbar{width:100%;justify-content:space-between;gap:9px}#website-management .dm-search{max-width:none;flex:1;min-width:0}#website-management .dm-search input{width:100%}#website-management .dm-button{font-size:11px;padding:8px 11px}#website-management .dm-table{min-width:760px}#website-management .dm-table th,#website-management .dm-table td{padding-left:15px;padding-right:15px}#website-management .dm-table-footer{padding:13px 16px;font-size:9px;gap:7px}#website-management .dm-address-note,#website-management .dm-network-note{padding:15px;font-size:10px}#website-management .dm-deployment-card{margin:0 14px 17px;padding:18px 15px}#website-management .dm-deployment-title h3{font-size:16px}#website-management .dm-deployment-details{grid-template-columns:1fr;gap:17px;padding:20px 0;margin-top:19px}#website-management .dm-deployment-actions{gap:9px}#website-management .dm-text-link{margin-left:0;width:100%;margin-top:3px}#website-management .dm-dialog{padding:22px 19px;max-width:calc(100% - 26px)}#website-management .dm-detail-list>div{grid-template-columns:76px minmax(0,1fr);gap:10px}#website-management .dm-detail-dialog h2{font-size:17px}#website-management .dm-empty-large{padding:45px 17px}}
+
+
+#website-management .dm-access-card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+  min-height: 0;
+  margin-bottom: 16px;
+  padding: 17px 20px;
+  border-color: var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+  box-shadow: none;
+}
+#website-management .dm-access-card::after, #website-management .dm-access-card::before { content: none; }
+#website-management .dm-access-title { margin-bottom: 3px; }
+#website-management .dm-access-title h2, #website-management .dm-deployment-title h2 { margin: 0; font-size: 15px; color: var(--ink); }
+#website-management .dm-access-url { gap: 6px; margin-top: 0; }
+#website-management .dm-primary-url, #website-management .dm-address {
+  min-width: 0;
+  font: 13px/1.5 Consolas, "Microsoft YaHei", monospace;
+  overflow-wrap: anywhere;
+}
+#website-management .dm-access-url .dm-icon-button { min-width: 36px; min-height: 36px; }
+#website-management .dm-button.primary { background: var(--blue); border-color: var(--blue); }
+#website-management .dm-tabs { gap: 16px; margin-bottom: 12px; }
+#website-management .dm-tabs button { min-height: 42px; font-size: 13px; }
+#website-management .dm-tabs button[aria-selected="true"] { color: var(--blue); }
+#website-management .dm-content > .dm-toolbar { margin: 0 0 12px; justify-content: space-between; }
+#website-management .dm-content > .dm-toolbar .dm-search { min-width: 0; max-width: 320px; }
+#website-management .dm-table-wrap { border-radius: 11px; border-color: var(--line); }
+#website-management .dm-table { min-width: 530px; }
+#website-management .dm-table td { padding-block: 12px; }
+#website-management .dm-row-actions button, #website-management .dm-row-actions a { min-height: 32px; }
+#website-management .dm-deployment-title { justify-content: space-between; }
+#website-management .dm-deployment-details { margin-block: 14px 6px; }
+#website-management .dm-deployment-details dd, #website-management .dm-detail-list dd { overflow-wrap: anywhere; }
+#website-management .dm-meta { margin-top: 12px; padding-top: 10px; border-top: 1px solid var(--line); color: var(--muted); }
+#website-management .dm-meta summary { cursor: pointer; color: var(--ink); font-weight: 600; }
+#website-management .dm-meta > p { font-size: 12px; }
+#website-management .dm-meta .dm-detail-list { margin-top: 10px; }
+#website-management .dm-empty-large .dm-button { margin-top: 14px; }
+#website-management .dm-detail-actions { flex-wrap: wrap; }
+#website-management .dm-detail-dialog .dm-table { min-width: 0; }
+#website-management .dm-dialog h2 { min-width: 0; overflow-wrap: anywhere; }
+@media (max-width: 520px) {
+  #website-management .dm-access-card { padding: 14px; }
+  #website-management .dm-content > .dm-toolbar { flex-wrap: wrap; gap: 8px; }
+  #website-management .dm-content > .dm-toolbar .dm-search { flex: 1 1 140px; }
+  #website-management .dm-tabs { gap: 8px; }
+}

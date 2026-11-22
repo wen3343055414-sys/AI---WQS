@@ -59,7 +59,16 @@ def main():
             if action == "rollback" and not current.get("previous"):
                 raise RuntimeError("还没有可回退的上一运行版本。")
             getattr(service, action)()
-            message = "版本更新检查完成；只有通过同一提交 CI 验收的版本才会部署。" if action == "update" else "已回退到上一运行版本，业务数据库已保留。"
+            live = deployer.read_json(service.current_path, {})
+            current_sha = live.get("sha", sha)
+            if action == "rollback":
+                message = f"已回退至 {current_sha[:12]}。"
+            elif current_sha == sha:
+                message = f"检查完成，当前运行 {sha[:12]}。"
+            else:
+                message = f"工作台已更新至 {current_sha[:12]}。"
+                if live.get("verification") == "pending-admin":
+                    message += "管理服务正在切换。"
         elif action == "backup":
             service.backup(sha)
             current["lastBackup"] = deployer.now()
