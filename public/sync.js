@@ -27,6 +27,11 @@ export class WorkspaceSync {
   status(label) { this.label = label; this.refreshStatus(); }
   refreshStatus() {
     for (const element of document.querySelectorAll("[data-server-label]")) element.textContent = this.label;
+    for (const indicator of document.querySelectorAll("[data-sync-indicator]")) {
+      indicator.title = this.label;
+      indicator.setAttribute("aria-label", "连接：" + this.label);
+      indicator.dataset.state = this.label === "已同步到本机数据库" ? "ready" : this.conflict ? "conflict" : "waiting";
+    }
     for (const element of document.querySelectorAll("[data-server-version]")) element.textContent = this.version ? this.version.slice(0, 12) : "静态演示版";
     const banner = document.querySelector("#sync-conflict");
     if (banner) banner.hidden = !this.conflict;

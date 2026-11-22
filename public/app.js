@@ -63,6 +63,7 @@ const paths = {
   copy: '<rect x="8" y="8" width="13" height="13" rx="2"/><path d="M15 8V3H3v12h5"/>',
   refresh: '<path d="M20 8A8.5 8.5 0 1 0 21 14M20 3v5h-5"/>',
   menu: '<path d="M4 6h16M4 12h16M4 18h16"/>',
+  more: '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
   "sidebar-close": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16m7-12-4 4 4 4"/>',
   "sidebar-open": '<rect x="3" y="4" width="18" height="16" rx="2"/><path d="M8 4v16m4-12 4 4-4 4"/>',
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
@@ -81,6 +82,9 @@ const iconButton = (action, label, name, extra = "") =>
     "icon-button",
     `aria-label="${e(label)}" title="${e(label)}" ${extra}`,
   );
+function rowActions(label, ...actions) {
+  return `<details class="row-actions"><summary class="icon-button" aria-label="${e(label)}" title="${e(label)}">${icon("more")}</summary><div class="row-action-list">${actions.join("")}</div></details>`;
+}
 const nav = [
   ["todo", "任务", "list"],
   ["home", "首页", "home"],
@@ -167,12 +171,12 @@ function aiModelOptions() {
   const key = state.settings.modelKey || '', models = modelConfig.models || [];
   const groups = new Map();
   for (const model of models) { if (!groups.has(model.providerId)) groups.set(model.providerId, { provider: model.provider, models: [] }); groups.get(model.providerId).models.push(model); }
-  return `<option value="" ${!key ? 'selected' : ''}>跟随服务端默认${modelConfig.model ? ` · ${e(modelConfig.model)}` : ''}</option>` +
+  return `<option value="" ${!key ? 'selected' : ''}>默认${modelConfig.model ? ` · ${e(modelConfig.model)}` : ''}</option>` +
     (key && !models.some(model => model.key === key) ? `<option value="${e(key)}" selected disabled>所选模型已停用</option>` : '') +
     [...groups.values()].map(group => `<optgroup label="${e(group.provider)}">${group.models.map(model => `<option value="${e(model.key)}" ${key === model.key ? 'selected' : ''}>${e(model.name)}${model.name !== model.id ? ` · ${e(model.id)}` : ''}</option>`).join('')}</optgroup>`).join('');
 }
 function modelPrivacy() {
-  return activeModel().ready ? `已连接 ${activeModel().provider} · 对话和所选文本将发送给模型服务，密钥由服务端保管` : activeModel().message;
+  return activeModel().ready ? `消息和选入的资料会发送给 ${activeModel().provider}。` : '消息和选入的资料会发送给所选模型服务。';
 }
 async function refreshModelConfig(force = false) {
   if (!sync?.authenticated || modelConfigPending || (!force && Date.now() - modelConfigChecked < 5000)) return;
@@ -183,10 +187,10 @@ async function refreshModelConfig(force = false) {
     if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
     modelConfig = value;
-    if (changed && !chatPending && !dialog.open && !document.activeElement?.matches('input,textarea,select')) render();
     const current = activeModel();
     document.querySelectorAll('[data-model-label]').forEach(element => { element.textContent = current.ready ? current.model : '模型未就绪'; });
-    document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = current.ready ? `已连接 ${current.provider} · ${current.model}` : current.message; });
+    document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = current.message || ''; });
+    document.querySelectorAll('[data-model-problem]').forEach(element => { element.hidden = current.ready; });
     if (changed && !chatPending) document.querySelectorAll('[data-setting="modelKey"]').forEach(select => { if (document.activeElement !== select) select.innerHTML = aiModelOptions(); });
     const send = document.querySelector('#message-form button[type=submit]');
     if (send) send.disabled = Boolean(chatPending || !current.ready || hasPluginApproval());
@@ -295,27 +299,19 @@ function dateText(value, full = false) {
     timeZone: "Asia/Shanghai",
   }).format(new Date(value));
 }
-const today = () =>
-  new Intl.DateTimeFormat("zh-CN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-    weekday: "long",
-    timeZone: "Asia/Shanghai",
-  }).format(new Date());
 const category = (value) => {
   const [tone, name] = categoryStyle[value] || ["purple", "file"];
   return `<span class="category tone-${tone}">${icon(name)}${e(value)}</span>`;
 };
 const empty = (name, title, description, action = "") =>
-  `<div class="empty">${icon(name)}<h3>${title}</h3><p>${description}</p>${action}</div>`;
+  `<div class="empty">${icon(name)}<h3>${title}</h3>${description ? `<p>${description}</p>` : ""}${action}</div>`;
 const notice = (text) =>
   `<div class="notice">${icon("info")}<span>${text}</span></div>`;
-function heading(title, description, action = "") {
-  return `<div class="page-intro"><div><h1 tabindex="-1" id="page-title">${title}</h1><p>${description}</p></div>${action}</div>`;
+function heading(title, action = "") {
+  return `<div class="page-intro"><h1 tabindex="-1" id="page-title">${title}</h1>${action}</div>`;
 }
-function section(title, caption = "", action = "") {
-  return `<div class="section-heading"><h2>${title}${caption ? `<span class="caption">${caption}</span>` : ""}</h2>${action}</div>`;
+function section(title, action = "") {
+  return `<div class="section-heading"><h2>${title}</h2>${action}</div>`;
 }
 function modelOptions() {
   return Object.entries(MODELS)
@@ -327,14 +323,32 @@ function modelOptions() {
 }
 function composer(home = false) {
   const key = home ? "home" : route().id || "new";
+  const model = activeModel();
   return `<form class="composer" id="message-form" data-draft="${e(key)}">
-    ${home ? `<label class="composer-label" for="message-input">${icon("spark")}今天，想一起完成什么？</label>` : '<label class="visually-hidden" for="message-input">输入消息</label>'}
-    <textarea id="message-input" name="message" maxlength="20000" required placeholder="${home ? "写下你的想法，或者从下方选择一个灵感起点…" : "输入你的问题，继续这段思考…"}">${e(drafts.get(key) || "")}</textarea>
-    <div class="composer-bottom"><div class="composer-controls">${iconButton("attach", "从知识库添加文本", "clip")}${button("plugin-picker", '<span data-plugin-choice-label>' + (selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件") + "</span>", "puzzle", "composer-plugin" + (selectedPluginIds.size ? " active" : ""), sync?.authenticated ? "" : "disabled")}<select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select><select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select></div><button type="submit" class="btn btn-primary" ${chatPending || !activeModel().ready || (!home && hasPluginApproval()) ? 'disabled' : ''}>${chatPending ? '正在回复…' : home ? '开始对话' : '发送'}${icon("arrow")}</button></div>
+    <label class="visually-hidden" for="message-input">输入消息</label>
+    <textarea id="message-input" name="message" maxlength="20000" required placeholder="输入消息…">${e(drafts.get(key) || "")}</textarea>
+    <div class="composer-bottom">
+      <div class="composer-controls">
+        ${iconButton("attach", "从知识库添加文本", "clip")}
+        ${button("plugin-picker", '<span data-plugin-choice-label>' + (selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件") + "</span>", "puzzle", "composer-plugin" + (selectedPluginIds.size ? " active" : ""), sync?.authenticated ? "" : "disabled")}
+        <select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select>
+        <select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select>
+      </div>
+      <div class="composer-submit">
+        ${iconButton("data-use", "查看消息如何处理", "shield")}
+        <button type="submit" class="btn btn-primary" ${chatPending || !model.ready || (!home && hasPluginApproval()) ? "disabled" : ""}>${chatPending ? "等待回复…" : "发送"}${icon("arrow")}</button>
+      </div>
+    </div>
+    <div class="composer-problem" data-model-problem ${model.ready ? "hidden" : ""} role="status"><span data-model-summary>${e(model.message)}</span> <a href="#settings">查看连接</a></div>
   </form>`;
 }
 function promptCard(p) {
-  return `<article class="prompt-card"><div class="prompt-card-top">${category(p.category)}${button("favorite", "", "star", `icon-button favorite ${p.favorite ? "active" : ""}`, `data-id="${p.id}" aria-label="${p.favorite ? "取消收藏" : "收藏"}：${e(p.title)}" aria-pressed="${p.favorite}"`)}</div><h3>${e(p.title)}</h3><p>${e(p.description || "一个值得保留的好提示词。")}</p><div class="prompt-card-bottom">${button("use-prompt", `使用提示词 ${icon("arrow")}`, "", "btn btn-quiet", `data-id="${p.id}"`)}${button("view-prompt", "查看与编辑", "", "btn btn-quiet", `data-id="${p.id}"`)}</div></article>`;
+  const actions = `data-id="${e(p.id)}"`;
+  return `<article class="prompt-card">
+    <div class="prompt-card-top">${category(p.category)}${button("favorite", "", "star", `icon-button favorite ${p.favorite ? "active" : ""}`, `${actions} aria-label="${p.favorite ? "取消收藏" : "收藏"}：${e(p.title)}" aria-pressed="${p.favorite}"`)}</div>
+    <h3>${e(p.title)}</h3>${p.description ? `<p>${e(p.description)}</p>` : ""}
+    <div class="prompt-card-bottom">${button("use-prompt", "使用提示词", "arrow", "btn btn-tinted", actions)}${iconButton("view-prompt", "编辑：" + p.title, "pen", actions)}</div>
+  </article>`;
 }
 function sortedConversations(query = "") {
   const text = query.trim().toLocaleLowerCase();
@@ -346,44 +360,55 @@ function sortedConversations(query = "") {
 function conversationList(sessions, filtered = false) {
   if (!sessions.length) return empty(
     "history", filtered ? "没有找到相关对话" : "还没有历史对话",
-    filtered ? "试试对话标题或消息中的其他关键词。" : "开启新对话，你的思考会保存在这里。",
+    filtered ? "试试对话标题或消息中的其他关键词。" : "",
     filtered ? "" : button("new-chat", "新对话", "plus", "btn"),
   );
   return `<ul class="conversation-list" aria-label="历史对话列表">${sessions.map(session => {
-    const content = session.messages.at(-1)?.content || "还没有消息，点击继续对话。";
+    const last = session.messages.at(-1);
+    const content = (last?.demo ? session.messages.findLast(message => message.role === "user") : last)?.content || "";
     const preview = Array.from(content.replace(/\s+/g, " ")).slice(0, 120).join("");
     return `<li><a class="conversation-link" href="#chat/${e(session.id)}" aria-label="继续对话：${e(session.title)}">
       <span class="conversation-symbol">${icon("chat")}</span>
-      <span class="conversation-copy"><strong>${e(session.title)}</strong><span>${e(preview)}</span></span>
-      <span class="conversation-meta"><time datetime="${e(session.updatedAt)}">${dateText(session.updatedAt, true)}</time><small>${session.messages.length} 条消息</small></span>
+      <span class="conversation-copy"><strong>${e(session.title)}</strong>${preview && preview !== session.title ? `<span>${e(preview)}</span>` : ""}</span>
+      <span class="conversation-meta"><time datetime="${e(session.updatedAt)}">${dateText(session.updatedAt, true)}</time></span>
       <span class="conversation-chevron">${icon("chevron")}</span>
     </a></li>`;
   }).join("")}</ul>`;
 }
+function starterButtons() {
+  return `<div class="starter-buttons" role="group" aria-label="对话快捷方式">${STARTERS.map(starter =>
+    button("starter", e(starter.title), starter.icon, "btn starter-button", `data-id="${starter.id}"`),
+  ).join("")}</div>`;
+}
+function favoriteRow(prompt) {
+  const [tone, symbol] = categoryStyle[prompt.category] || ["purple", "file"];
+  const target = `data-id="${e(prompt.id)}"`;
+  return `<article class="favorite-row">
+    <span class="tile-icon tone-${tone}">${icon(symbol)}</span>
+    <span class="favorite-row-copy"><strong>${e(prompt.title)}</strong>${prompt.description ? `<small>${e(prompt.description)}</small>` : ""}</span>
+    ${button("use-prompt", "使用", "arrow", "btn btn-tinted", `${target} aria-label="使用提示词：${e(prompt.title)}"`)}
+    ${rowActions("提示词操作：" + prompt.title,
+      button("view-prompt", "编辑", "pen", "btn btn-quiet", target),
+      button("favorite", "取消收藏", "star", "btn btn-quiet", target))}
+  </article>`;
+}
 function homePage() {
-  const hour = Number(
-    new Intl.DateTimeFormat("en-US", {
-      hour: "numeric",
-      hourCycle: "h23",
-      timeZone: "Asia/Shanghai",
-    }).format(new Date()),
-  );
-  const hello =
-    hour < 6
-      ? "夜深了，记得休息"
-      : hour < 12
-        ? "上午好，开启高效的一天"
-        : hour < 18
-          ? "下午好，让好想法继续生长"
-          : "晚上好，留一点时间给灵感";
-  const favorites = state.prompts.filter((p) => p.favorite).slice(0, 3);
-  return `<div class="greeting">${icon("sun")}${hello}</div><div class="page-intro"><div><h1 tabindex="-1" id="page-title">把想法，变成<span>下一步。</span></h1><p>你的 AI 工作空间，让创作、思考与日常工作从容发生。</p></div><span class="date">${today()}</span></div>
-  ${composer(true)}<div class="privacy-line">${icon("shield")}${e(modelPrivacy())}</div>
-  ${section("从一个灵感开始", "为日常工作，找到更好的起点")}
-  <div class="quick-grid">${STARTERS.map((s) => `<button class="quick-card" data-action="starter" data-id="${s.id}"><span class="tile-icon tone-${s.tone}">${icon(s.icon)}</span><strong>${s.title}</strong><small>${s.subtitle}</small></button>`).join("")}</div>
-  <div class="dashboard-lower"><div>${section("常用提示词", "收藏好方法，下次直接用", '<a class="btn btn-quiet" href="#prompts">查看全部 ' + icon("arrow") + "</a>")}<div class="prompt-grid">${favorites.length ? favorites.map(promptCard).join("") : empty("star", "把好用的提示词收藏在这里", "去提示词库点亮星标，建立你的常用清单。", '<a class="btn" href="#prompts">浏览提示词库</a>')}</div>
-  ${section("最近对话", "每一份思考，都有迹可循", '<a class="btn btn-quiet" href="#tasks">全部对话 ' + icon("arrow") + "</a>")}${conversationList(sortedConversations().slice(0, 3))}</div>
-  <aside class="side-panel"><div class="note-card"><span class="eyebrow">${icon("bulb")}灵感便签 / 01</span><h3>好的回答，<br>从好的提问开始。</h3><p>给 AI 一个角色、一点背景，<br>再告诉它你期待的结果。</p><div class="mini-example">“你是一位内容编辑，请面向初学者，用一个例子解释这个概念。”</div>${button("prompt-guide", `看看怎么提问 ${icon("arrow")}`, "", "btn btn-quiet")}</div></aside></div>`;
+  const favorites = state.prompts.filter(prompt => prompt.favorite).slice(0, 3);
+  return `<div class="home-hub">
+    ${heading("开始对话")}
+    ${composer(true)}
+    ${starterButtons()}
+  </div>
+  <div class="home-collections">
+    <section>
+      ${section("收藏提示词", '<a class="btn btn-quiet" href="#prompts">提示词库 ' + icon("arrow") + "</a>")}
+      ${favorites.length ? `<div class="home-favorites">${favorites.map(favoriteRow).join("")}</div>` : empty("star", "暂无收藏", "")}
+    </section>
+    <section>
+      ${section("最近对话", '<a class="btn btn-quiet" href="#tasks">全部对话 ' + icon("arrow") + "</a>")}
+      ${conversationList(sortedConversations().slice(0, 4))}
+    </section>
+  </div>`;
 }
 function promptResults() {
   const list = state.prompts.filter(
@@ -400,8 +425,8 @@ function promptResults() {
     ? `<div class="prompt-grid library">${list.map(promptCard).join("")}</div>`
     : empty(
         "search",
-        "还没有找到合适的提示词",
-        "试试其他分类、关键词，或创建你自己的提示词。",
+        "没有匹配的提示词",
+        "",
         button("new-prompt", "新建提示词", "plus", "btn"),
       );
 }
@@ -415,7 +440,6 @@ function promptsPage() {
   return (
     heading(
       "提示词库",
-      "把好用的方法留下来，让每次创作都有一个好起点。",
       button("new-prompt", "新建提示词", "plus", "btn btn-primary"),
     ) +
     `<div class="toolbar"><div id="prompt-tabs">${tabs(["全部", "已收藏", ...CATEGORIES], promptFilter, "prompt-filter")}</div>${searchField("prompt-search", "搜索提示词…", promptQuery)}</div><div id="prompt-results" aria-live="polite">${promptResults()}</div>`
@@ -423,19 +447,24 @@ function promptsPage() {
 }
 function documentResults() {
   const list = state.documents.filter(
-    (d) =>
-      (documentFilter === "全部" || d.tag === documentFilter) &&
-      `${d.name} ${d.tag} ${d.content}`
-        .toLocaleLowerCase()
-        .includes(documentQuery.toLocaleLowerCase()),
+    document => (documentFilter === "全部" || document.tag === documentFilter) &&
+      (document.name + " " + document.tag + " " + document.content).toLocaleLowerCase().includes(documentQuery.toLocaleLowerCase()),
   );
-  if (!list.length)
-    return empty(
-      "folder",
-      state.documents.length ? "没有找到匹配的资料" : "给想法，一点背景资料",
-      "添加一份资料，随时查找、预览，或将文本带入对话。",
-    );
-  return `<div class="document-grid">${list.map((d) => `<article class="document-card"><div class="document-top"><span class="tile-icon tone-blue">${icon("file")}</span>${iconButton("delete-document", `删除：${d.name}`, "trash", `data-id="${d.id}"`)}</div><h3>${e(d.name)}</h3><p class="metadata">${d.size < 1024 ? `${d.size} B` : `${(d.size / 1024).toFixed(1)} KB`} · ${dateText(d.createdAt)}</p><span class="status-pill">${d.kind === "text" ? "文本已读取 · 本地" : "仅保存文件信息"}</span><div class="document-bottom">${button("document-tag", e(d.tag), "", "btn btn-quiet", `data-id="${d.id}" aria-label="编辑标签：${e(d.name)}"`)}${button("view-document", `查看 ${icon("arrow")}`, "", "btn btn-quiet", `data-id="${d.id}"`)}</div></article>`).join("")}</div>`;
+  if (!list.length) return empty("folder", state.documents.length ? "没有匹配的资料" : "暂无资料", "");
+  return `<div class="document-grid">${list.map(document => {
+    const target = `data-id="${e(document.id)}"`;
+    const size = document.size < 1024 ? `${document.size} B` : `${(document.size / 1024).toFixed(1)} KB`;
+    return `<article class="document-card">
+      <div class="document-top"><span class="tile-icon tone-blue">${icon("file")}</span>
+        ${rowActions("资料操作：" + document.name,
+          button("document-tag", "编辑标签", "pen", "btn btn-quiet", target),
+          button("delete-document", "删除资料", "trash", "btn btn-quiet menu-danger", target))}
+      </div>
+      <h3>${e(document.name)}</h3>
+      <p class="metadata">${size} · ${dateText(document.createdAt)}${document.kind === "text" ? "" : " · 仅文件信息"}</p>
+      <div class="document-bottom"><span class="category">${e(document.tag)}</span>${button("view-document", "查看", "arrow", "btn btn-quiet", target)}</div>
+    </article>`;
+  }).join("")}</div>`;
 }
 function documentTabs() {
   return tabs(
@@ -445,17 +474,20 @@ function documentTabs() {
   );
 }
 function knowledgePage() {
-  return (
-    heading(
-      "知识库",
-      "整理你的背景资料，让零散的信息随时可用。",
-      button("upload", "添加资料", "plus", "btn btn-primary"),
-    ) +
-    notice(
-      "资料仅保存于当前浏览器。TXT、Markdown、CSV、JSON 可读取文本；PDF、Word 等仅记录文件信息，尚未进行解析、向量检索或云端上传。",
-    ) +
-    `<div class="upload-zone" id="upload-zone">${icon("upload")}<strong>把资料放在这里，给思考一个起点</strong><p>拖拽文件至此，或点击选择文件 · 每个文件不超过 1 MB</p>${button("upload", "选择文件", "plus", "btn")}<input type="file" id="file-input" multiple hidden /></div><div class="toolbar"><div id="document-tabs">${documentTabs()}</div>${searchField("document-search", "搜索文件名、标签或文本…", documentQuery)}</div><div id="document-results" aria-live="polite">${documentResults()}</div>`
-  );
+  const source = sync?.mode === "server" ? "资料保存到工作空间。" : "资料保存在此浏览器。";
+  return heading("知识库", button("upload", "添加资料", "plus", "btn btn-primary")) +
+    `<div class="knowledge-tools">
+      <div class="upload-zone" id="upload-zone" aria-label="拖放文件">
+        ${icon("upload")}<span>拖放文件 · 每份 1 MB 以内</span>
+        <input type="file" id="file-input" multiple hidden />
+      </div>
+      <details class="inline-details">
+        <summary>支持的格式</summary>
+        <p>${source}支持读取 TXT、Markdown、CSV、JSON。其他格式仅保存文件信息。</p>
+      </details>
+    </div>
+    <div class="toolbar"><div id="document-tabs">${documentTabs()}</div>${searchField("document-search", "搜索资料…", documentQuery)}</div>
+    <div id="document-results" aria-live="polite">${documentResults()}</div>`;
 }
 function todoResults() {
   const query = todoQuery.trim().toLocaleLowerCase();
@@ -463,20 +495,22 @@ function todoResults() {
     (todoFilter === "全部" || todo.done === (todoFilter === "已完成")) &&
     (!query || (todo.title + " " + todo.notes).toLocaleLowerCase().includes(query)))
     .sort((one, two) => Number(one.done) - Number(two.done) || two.updatedAt.localeCompare(one.updatedAt));
-  if (!items.length) return empty("list", query || todoFilter !== "全部" ? "没有符合条件的任务" : "从一个小任务开始",
-    query || todoFilter !== "全部" ? "试试其他关键词或筛选条件。" : "把想做的事记下来，完成一项，前进一步。",
-    query || todoFilter !== "全部" ? "" : button("new-todo", "新建任务", "plus", "btn"));
+  if (!items.length) return empty("list", query || todoFilter !== "全部" ? "没有符合条件的任务" : "暂无任务", "");
   return '<div class="todo-list">' + items.map(todo => `<article class="todo-item ${todo.done ? "is-done" : ""}" data-todo-id="${e(todo.id)}">
     ${button("toggle-todo", icon("check"), "", "todo-toggle", `data-id="${e(todo.id)}" role="checkbox" aria-checked="${todo.done}" aria-label="${todo.done ? "恢复待办" : "标记完成"}：${e(todo.title)}"`)}
-    <div class="todo-copy"><h2>${e(todo.title)}</h2>${todo.notes ? `<p>${e(todo.notes)}</p>` : ""}<small>${todo.done ? "已完成" : "待完成"} · 更新于 ${dateText(todo.updatedAt, true)}</small></div>
+    <div class="todo-copy"><h2>${e(todo.title)}</h2>${todo.notes ? `<p>${e(todo.notes)}</p>` : ""}</div>
     <div class="todo-actions">${iconButton("edit-todo", `编辑任务：${todo.title}`, "pen", `data-id="${e(todo.id)}"`)}${iconButton("delete-todo", `删除任务：${todo.title}`, "trash", `data-id="${e(todo.id)}"`)}</div>
   </article>`).join("") + "</div>";
 }
 function todoPage() {
-  const items = state.todos || [], completed = items.filter(todo => todo.done).length;
-  return heading("任务", "把计划拆成清晰的下一步。", button("new-todo", "新建任务", "plus", "btn btn-primary")) +
-    `<div class="todo-overview" aria-label="任务概览"><div><span>全部任务</span><strong>${items.length}</strong></div><div><span>待完成</span><strong>${items.length - completed}</strong></div><div><span>已完成</span><strong>${completed}</strong></div></div>
-    <div class="toolbar todo-toolbar"><div id="todo-tabs">${tabs(["全部", "待完成", "已完成"], todoFilter, "todo-filter")}</div>${searchField("todo-search", "搜索任务名称或备注…", todoQuery)}</div>
+  const items = state.todos || [];
+  const completed = items.filter(todo => todo.done).length;
+  return heading("任务", button("new-todo", "新建任务", "plus", "btn btn-primary")) +
+    `<div class="toolbar todo-toolbar">
+      <div id="todo-tabs">${tabs(["全部", "待完成", "已完成"], todoFilter, "todo-filter")}</div>
+      ${items.length ? `<div class="todo-progress"><progress max="${items.length}" value="${completed}" aria-label="完成进度"></progress><span>${completed}/${items.length} 完成</span></div>` : ""}
+      ${searchField("todo-search", "搜索任务…", todoQuery)}
+    </div>
     <div id="todo-results" aria-live="polite">${todoResults()}</div>`;
 }
 function pluginReady(connection) {
@@ -491,7 +525,7 @@ async function refreshPlugins(force = false) {
     const data = await sync.request("/api/plugins");
     if (cycle !== chatAccountCycle || !sync.authenticated) return;
     if (!Array.isArray(data.connections) || data.connections.length > 8 || !Array.isArray(data.history)) throw new Error("插件列表响应无效。");
-    const changed = JSON.stringify([pluginConnections, pluginHistory, pluginError]) !== JSON.stringify([data.connections, data.history, ""]);
+    const changed = !pluginsLoaded || JSON.stringify([pluginConnections, pluginHistory, pluginError]) !== JSON.stringify([data.connections, data.history, ""]);
     pluginConnections = data.connections;
     pluginHistory = data.history;
     pluginError = "";
@@ -516,41 +550,77 @@ async function pluginRequest(endpoint, data = {}) {
 function pluginsPage() {
   const usable = sync?.mode === "server" && sync.authenticated;
   const disabled = usable && pluginsLoaded && !pluginError ? "" : "disabled";
-  const connected = pluginConnections.filter(connection => connection.status === "connected" && connection.enabled).length;
-  const content = pluginConnections.length ? '<div class="plugin-connections">' + pluginConnections.map(connection => {
-    const ready = pluginReady(connection);
-    return `<article class="plugin-connection" data-plugin-id="${e(connection.id)}"><div class="plugin-connection-head"><span class="tile-icon tone-purple">${icon(connection.kind === "github" ? "code" : "puzzle")}</span>
-      <div><h3>${e(connection.name)}</h3><p>${e(connection.endpoint)}</p></div><span class="plugin-state ${connection.status === "connected" && connection.enabled ? "is-connected" : ""}">${!connection.enabled ? "已停用" : connection.status === "connected" ? "已连接" : "连接异常"}</span></div>
-      <p class="plugin-connection-summary">${connection.toolCount} 项可用工具 · ${connection.selectedCount} 项用于对话</p>
-      ${connection.error ? `<p class="plugin-error">${e(connection.error)}</p>` : ""}
-      <div class="plugin-connection-actions">${button("plugin-use-chat", "在对话中使用", "chat", "btn btn-primary", `data-id="${e(connection.id)}" ${ready ? "" : "disabled"}`)}
-        ${button("plugin-details", "查看工具", "list", "btn", `data-id="${e(connection.id)}"`)}
-        ${button("plugin-enable", connection.enabled ? "停用" : "启用", "", "btn btn-quiet", `data-id="${e(connection.id)}"`)}
-        ${iconButton("plugin-reconnect", "重新验证：" + connection.name, "refresh", `data-id="${e(connection.id)}"`)}
-        ${iconButton("plugin-disconnect", "断开连接：" + connection.name, "close", `data-id="${e(connection.id)}"`)}</div></article>`;
-  }).join("") + "</div>" : empty("puzzle", !pluginsLoaded && usable ? "正在读取插件连接" : "还没有连接插件",
-    usable ? "连接 GitHub 或其他 MCP 服务，将真实工具带入工作。" : "插件连接需要工作台服务，请先连接并登录。");
-  const history = pluginHistory.length ? `<section class="plugin-recent"><div class="section-heading"><h2>最近调用</h2><span class="caption">当前账号的实际执行记录</span></div>
-    <div class="plugin-history-list">${pluginHistory.map(call => `<div><span><strong>${e(call.pluginName)}</strong><small>${e(call.toolName)}</small></span><span>${({success:"已完成",error:"请求失败",unknown:"结果未确认",running:"执行中"})[call.status] || "已记录"}</span><time>${dateText(call.createdAt, true)}</time></div>`).join("")}</div></section>` : "";
-  return heading("插件", "连接你的工具，让对话真正完成工作。", button("plugin-connect", "连接插件", "plus", "btn btn-primary", disabled)) +
-    `<div class="plugins-summary"><span>我的连接</span><div><small>已连接 ${connected} / ${pluginConnections.length}</small>${button("plugins-refresh", "刷新", "refresh", "btn btn-quiet", usable ? "" : "disabled")}</div></div>
-    ${pluginError ? notice(e(pluginError)) : ""}${content}
-    <section class="plugin-discover"><div class="section-heading"><h2>连接更多工具</h2><span class="caption">通过 MCP 接入外部服务</span></div><div class="plugin-catalog">
-      <article class="plugin-catalog-card"><span class="tile-icon tone-purple">${icon("code")}</span><h3>GitHub</h3><p>读取仓库、查阅代码、协作处理 Issue 与 Pull Request，具体能力取决于账号权限。</p><div><span>GitHub 官方 MCP</span>${button("plugin-connect-github", "连接 GitHub", "arrow", "btn", disabled)}</div></article>
-      <article class="plugin-catalog-card"><span class="tile-icon tone-blue">${icon("puzzle")}</span><h3>自定义 MCP</h3><p>连接其他提供远程 MCP 接口的工具，发现它们实际开放的操作。</p><div><span>HTTPS · Streamable HTTP</span>${button("plugin-connect", "添加服务", "plus", "btn", disabled)}</div></article>
-    </div></section>${history}`;
+  const connections = pluginConnections.length ? `<section>
+    ${section("我的连接", iconButton("plugins-refresh", "刷新连接", "refresh"))}
+    <div class="plugin-connections">${pluginConnections.map(connection => {
+      const target = `data-id="${e(connection.id)}"`;
+      const connected = connection.enabled && connection.status === "connected";
+      const label = !connection.enabled ? "已停用" : connected ? "已连接" : "连接异常";
+      return `<article class="plugin-connection" data-plugin-id="${e(connection.id)}">
+        <div class="plugin-connection-head">
+          <span class="tile-icon tone-purple">${icon(connection.kind === "github" ? "code" : "puzzle")}</span>
+          <div><h3>${e(connection.name)}</h3><p title="${e(connection.endpoint)}">${e(new URL(connection.endpoint).host)} · ${connection.toolCount} 项工具</p></div>
+          <span class="plugin-state ${connected ? "is-connected" : ""}">${label}</span>
+          ${rowActions("管理连接：" + connection.name,
+            button("plugin-enable", connection.enabled ? "停用" : "启用", "", "btn btn-quiet", target),
+            button("plugin-reconnect", "重新验证", "refresh", "btn btn-quiet", target),
+            button("plugin-disconnect", "断开连接", "close", "btn btn-quiet menu-danger", target))}
+        </div>
+        ${connection.error ? `<p class="plugin-error">${e(connection.error)}</p>` : ""}
+        <div class="plugin-connection-actions">
+          ${button("plugin-use-chat", "在对话中使用", "chat", "btn btn-tinted", target + (pluginReady(connection) ? "" : " disabled"))}
+          ${button("plugin-details", "查看工具", "", "btn btn-quiet", target)}
+        </div>
+      </article>`;
+    }).join("")}</div>
+  </section>` : "";
+  const history = pluginHistory.length ? `<details class="plugin-recent summary-panel">
+    <summary>最近调用 <span>${pluginHistory.length}</span></summary>
+    <div class="plugin-history-list">${pluginHistory.map(call => `<div>
+      <span><strong>${e(call.pluginName)}</strong><small>${e(call.toolName)}</small></span>
+      <span>${({success:"已完成",error:"请求失败",unknown:"结果未确认",running:"执行中"})[call.status] || "已记录"}</span>
+      <time datetime="${e(call.createdAt)}">${dateText(call.createdAt, true)}</time>
+    </div>`).join("")}</div>
+  </details>` : "";
+  return heading("插件") +
+    (pluginError ? `<div class="inline-alert">${notice(e(pluginError))}${button("plugins-refresh", "重试", "refresh", "btn")}</div>` : "") +
+    (!usable ? notice("登录工作台后可以连接插件。") : !pluginsLoaded ? '<p class="loading-line" role="status">正在读取连接…</p>' : "") +
+    connections +
+    `<section class="plugin-discover">
+      ${section("连接插件")}
+      <div class="plugin-catalog">
+        <article class="plugin-catalog-card">
+          <span class="tile-icon tone-purple">${icon("code")}</span>
+          <div><h3>GitHub</h3><p>仓库、Issue 与 Pull Request</p></div>
+          ${button("plugin-connect-github", "连接 GitHub", "arrow", "btn btn-tinted", disabled)}
+        </article>
+        <article class="plugin-catalog-card">
+          <span class="tile-icon tone-blue">${icon("puzzle")}</span>
+          <div><h3>自定义 MCP</h3><p>通过地址添加远程工具</p></div>
+          ${button("plugin-connect", "添加服务", "plus", "btn", disabled)}
+        </article>
+      </div>
+    </section>` + history;
 }
 function pluginConnector(kind = "custom") {
-  if (!sync?.authenticated || sync.mode !== "server") throw new Error("请先连接并登录工作台服务。");
+  if (!sync?.authenticated || sync.mode !== "server") throw new Error("请先登录工作台。");
   const github = kind === "github";
-  openDialog(github ? "连接 GitHub" : "连接 MCP 插件",
-    `<form id="plugin-connect-form" class="dialog-body" data-kind="${github ? "github" : "custom"}"><label>连接名称<input class="input" name="name" maxlength="80" required value="${github ? "GitHub" : ""}" placeholder="给这个连接取个名字" /></label>
-    <label>MCP 服务地址<input class="input" name="endpoint" type="url" maxlength="2000" required value="${github ? "https://api.githubcopilot.com/mcp/" : ""}" ${github ? "readonly" : ""} placeholder="https://你的服务地址/mcp" /></label>
-    ${github ? '<input type="hidden" name="authMode" value="bearer" />' : '<label>授权方式<select class="input" name="authMode" id="plugin-auth-mode"><option value="none">无需令牌</option><option value="bearer">Bearer 令牌</option></select></label>'}
-    <label id="plugin-token-label" ${github ? "" : "hidden"}>${github ? "GitHub 个人访问令牌" : "授权令牌"}<input class="input" name="token" type="password" maxlength="4096" autocomplete="off" spellcheck="false" data-plugin-secret ${github ? "required" : ""} placeholder="仅在连接时填写，不在页面回显" /></label>
-    <p class="field-help">凭据加密保存在本机服务端，按工作台账号隔离，不包含在工作空间 JSON 备份中。</p>
-    ${github ? '<p class="plugin-auth-help"><a href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">打开 GitHub 令牌设置</a>，选择需要协作的仓库和权限。每次工具执行前会展示具体操作供你确认。</p>' : '<p class="plugin-auth-help">填写远程 MCP 的最终 HTTPS 地址，支持无需授权或 Bearer 令牌的 Streamable HTTP 服务。</p>'}
-    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">连接并验证</button></div></form>`);
+  const name = `<label>连接名称<input class="input" name="name" maxlength="80" ${github ? "" : "required"} value="${github ? "GitHub" : ""}" /></label>`;
+  const endpoint = `<label>MCP 地址<input class="input" name="endpoint" type="url" maxlength="2000" required value="${github ? "https://api.githubcopilot.com/mcp/" : ""}" ${github ? "readonly" : 'placeholder="https://example.com/mcp"'} /></label>`;
+  const token = `<label id="plugin-token-label" ${github ? "" : "hidden"}>${github ? "GitHub 个人访问令牌" : "授权令牌"}<input class="input" name="token" type="password" maxlength="4096" autocomplete="off" spellcheck="false" data-plugin-secret ${github ? "required autofocus" : ""} /></label>`;
+  openDialog(github ? "连接 GitHub" : "添加 MCP 服务",
+    `<form id="plugin-connect-form" class="dialog-body" data-kind="${github ? "github" : "custom"}">
+      ${github ? `<input type="hidden" name="authMode" value="bearer" />
+        ${token}
+        <a class="form-link" href="https://github.com/settings/personal-access-tokens/new" target="_blank" rel="noopener noreferrer">创建 GitHub 令牌 ↗</a>
+        <details class="inline-details"><summary>连接信息</summary>${name}${endpoint}<p>令牌按账号加密保存。</p></details>` :
+        `${name}${endpoint}
+        <label>授权方式<select class="input" name="authMode" id="plugin-auth-mode"><option value="none">无需令牌</option><option value="bearer">Bearer 令牌</option></select></label>
+        ${token}
+        <details class="inline-details"><summary>连接要求</summary><p>使用支持 Streamable HTTP 的 HTTPS 地址。令牌按账号加密保存。</p></details>`}
+      <p class="dialog-error" id="form-error" role="alert"></p>
+      <div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">连接并验证</button></div>
+    </form>`);
 }
 async function pluginDetails(id) {
   const cycle = chatAccountCycle;
@@ -559,9 +629,9 @@ async function pluginDetails(id) {
   pluginDetailsCache.set(id, connection);
   const selected = new Set(connection.selectedTools);
   openDialog(connection.name + " · 可用工具",
-    `<form id="plugin-tools-form" class="dialog-body" data-id="${e(id)}" data-revision="${connection.revision}"><p>选择允许模型在对话中请求的工具，最多 40 项。实际执行仍需确认。</p>
-    <div class="plugin-tool-list">${connection.tools.map(tool => `<article class="plugin-tool-row" data-tool-name="${e(tool.name)}"><label><input type="checkbox" name="tools" value="${e(tool.name)}" ${selected.has(tool.name) ? "checked" : ""} /><span><strong>${e(tool.title || tool.name)}</strong><code>${e(tool.name)}</code><small>${e(tool.description)}</small></span></label>
-      ${button("plugin-tool-open", "执行工具", "arrow", "btn", `data-id="${e(id)}" data-tool="${e(tool.name)}" ${connection.enabled && connection.status === "connected" ? "" : "disabled"}`)}</article>`).join("") || empty("puzzle", "暂无可用工具", "此服务暂未开放工具，请检查权限后重新验证连接。")}</div>
+    `<form id="plugin-tools-form" class="dialog-body" data-id="${e(id)}" data-revision="${connection.revision}">
+    <fieldset class="plugin-tool-list"><legend>允许在对话中使用</legend>${connection.tools.map(tool => `<article class="plugin-tool-row" data-tool-name="${e(tool.name)}"><label><input type="checkbox" name="tools" value="${e(tool.name)}" ${selected.has(tool.name) ? "checked" : ""} /><span><strong>${e(tool.title || tool.name)}</strong>${tool.title && tool.title !== tool.name ? `<code>${e(tool.name)}</code>` : ""}${tool.description ? `<small>${e(tool.description)}</small>` : ""}</span></label>
+      ${button("plugin-tool-open", "执行工具", "arrow", "btn", `data-id="${e(id)}" data-tool="${e(tool.name)}" ${connection.enabled && connection.status === "connected" ? "" : "disabled"}`)}</article>`).join("") || empty("puzzle", "暂无可用工具", "检查服务权限后重新验证连接。")}</fieldset>
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}<button class="btn btn-primary" type="submit">保存对话工具</button></div></form>`, "plugin-tools-dialog");
 }
 function toolExample(schema) {
@@ -576,10 +646,9 @@ function pluginToolEditor(id, name) {
   const connection = pluginDetailsCache.get(id), tool = connection?.tools.find(tool => tool.name === name);
   if (!connection || !tool) throw new Error("请先打开插件工具列表。");
   openDialog(connection.name + " · " + (tool.title || tool.name),
-    `<form id="plugin-call-form" class="dialog-body" data-id="${e(id)}" data-tool="${e(name)}" data-revision="${connection.revision}" data-request-id="${uid("invoke")}"><p>${e(tool.description)}</p>
-    <details class="plugin-schema"><summary>查看参数说明</summary><pre>${e(JSON.stringify(tool.inputSchema, null, 2))}</pre></details>
+    `<form id="plugin-call-form" class="dialog-body" data-id="${e(id)}" data-tool="${e(name)}" data-revision="${connection.revision}" data-request-id="${uid("invoke")}"><details class="plugin-schema inline-details"><summary>参数说明</summary>${tool.description ? `<p>${e(tool.description)}</p>` : ""}<pre>${e(JSON.stringify(tool.inputSchema, null, 2))}</pre></details>
     <label>工具参数（JSON）<textarea class="input plugin-arguments" id="plugin-call-args" name="arguments" maxlength="40000" required spellcheck="false">${e(toolExample(tool.inputSchema))}</textarea></label>
-    <p class="field-help">点击“执行工具”后，这些参数会发送至 ${e(new URL(connection.endpoint).origin)}。</p>
+    <p class="field-help">发送至 ${e(new URL(connection.endpoint).origin)}</p>
     <p class="dialog-error" id="form-error" role="alert"></p><div id="plugin-call-result" aria-live="polite"></div>
     <div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}${button("plugin-new-call", "准备新调用", "plus", "btn", "hidden data-new-call")}<button class="btn btn-primary" type="submit">执行工具</button></div></form>`);
 }
@@ -587,18 +656,18 @@ async function pluginPicker() {
   await refreshPlugins(true);
   const connections = pluginConnections.filter(pluginReady);
   openDialog("选择对话插件",
-    `<form id="plugin-picker-form" class="dialog-body"><p>本次发送的请求可使用所选服务。模型提出工具操作后，会先展示名称和参数供你确认。</p>
-    ${connections.length ? `<div class="plugin-picker-list">${connections.map(connection => `<label><input type="checkbox" name="plugins" value="${e(connection.id)}" ${selectedPluginIds.has(connection.id) ? "checked" : ""} /><span><strong>${e(connection.name)}</strong><small>${connection.selectedCount} 项工具可用于对话</small></span></label>`).join("")}</div>` : empty("puzzle", "还没有可用于对话的插件", "先连接插件并选择对话工具。", '<a class="btn" href="#plugins">前往连接插件</a>')}
+    `<form id="plugin-picker-form" class="dialog-body">
+    ${connections.length ? `<div class="plugin-picker-list">${connections.map(connection => `<label><input type="checkbox" name="plugins" value="${e(connection.id)}" ${selectedPluginIds.has(connection.id) ? "checked" : ""} /><span><strong>${e(connection.name)}</strong><small>${connection.selectedCount} 项工具可用于对话</small></span></label>`).join("")}</div>` : empty("puzzle", "暂无可用插件", "", '<a class="btn" href="#plugins">前往连接插件</a>')}
     ${modelConfig.toolCalling !== true ? notice("当前模型服务端尚未提供对话工具调用能力，请先更新服务端；插件页仍可独立执行工具。") : ""}
-    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">确认选择</button></div></form>`);
+    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit" ${connections.length ? "" : "disabled"}>应用</button></div></form>`);
 }
 
 function todoEditor(id = "") {
   const todo = (state.todos || []).find(item => item.id === id);
   if (id && !todo) throw new Error("任务已不存在，请刷新后重试。");
   openDialog(todo ? "编辑任务" : "新建任务",
-    `<form id="todo-form" class="dialog-body" data-id="${e(id)}"><label>任务名称<input class="input" name="title" maxlength="100" required value="${e(todo?.title || "")}" placeholder="下一步，想完成什么？" autofocus /></label>
-    <label>备注<textarea class="input" name="notes" maxlength="2000" placeholder="补充任务背景或具体步骤（选填）">${e(todo?.notes || "")}</textarea></label>
+    `<form id="todo-form" class="dialog-body" data-id="${e(id)}"><label>任务名称<input class="input" name="title" maxlength="100" required value="${e(todo?.title || "")}" autofocus /></label>
+    <label>备注<textarea class="input" name="notes" maxlength="2000" placeholder="选填">${e(todo?.notes || "")}</textarea></label>
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存任务</button></div></form>`);
 }
 async function handlePluginForm(form, data) {
@@ -608,7 +677,7 @@ async function handlePluginForm(form, data) {
   try {
     if (form.id === "plugin-connect-form") {
       const value = await pluginRequest("/api/plugins/connect", { kind: form.dataset.kind,
-        name: String(data.get("name")), endpoint: String(data.get("endpoint")),
+        name: String(data.get("name")).trim() || (form.dataset.kind === "github" ? "GitHub" : ""), endpoint: String(data.get("endpoint")),
         authMode: String(data.get("authMode")), token: String(data.get("token") || "") });
       form.querySelector("[data-plugin-secret]").value = "";
       if (!value || cycle !== chatAccountCycle) return;
@@ -657,8 +726,7 @@ async function handlePluginForm(form, data) {
   }
 }
 function pluginApprovalView(taskId, approval) {
-  return `<section class="plugin-approval" aria-label="确认插件操作"><div class="plugin-approval-title">${icon("puzzle")}<strong>确认使用插件</strong></div>
-    <p>确认后，将以下参数发送给对应服务并执行工具。</p>
+  return `<section class="plugin-approval" aria-label="确认插件操作"><div class="plugin-approval-title">${icon("puzzle")}<strong>执行插件操作？</strong></div>
     ${approval.calls.map(call => `<details class="plugin-plan" open><summary>${e(call.pluginName)} · ${e(call.name)}</summary><small>${e(call.endpoint)}</small><pre>${e(JSON.stringify(call.arguments, null, 2))}</pre></details>`).join("")}
     <div class="plugin-approval-actions">${button("plugin-approve", "确认并执行", "check", "btn btn-primary", `data-id="${e(taskId)}"`)}
       ${button("plugin-reject", "取消操作", "", "btn", `data-id="${e(taskId)}"`)}</div></section>`;
@@ -722,23 +790,25 @@ function historyResults() {
     conversationList(sessions, Boolean(historyQuery.trim()));
 }
 function historyPage() {
-  return heading("历史对话", "回到上一次思考，继续下一步。",
+  return heading("历史对话",
     button("export-history", "导出对话", "download", "btn")) +
-    `<div class="toolbar"><span class="history-total">共 ${state.sessions.length} 段对话</span>${searchField("history-search", "搜索对话标题或内容…", historyQuery)}</div><div id="history-results" aria-live="polite">${historyResults()}</div>`;
+    `<div class="toolbar">${searchField("history-search", "搜索对话…", historyQuery)}</div><div id="history-results" aria-live="polite">${historyResults()}</div>`;
 }
 function chatPage() {
   const session = state.sessions.find((s) => s.id === route().id);
-  return `<div class="chat-layout"><aside class="chat-sidebar" aria-label="历史会话">${button("new-chat", "新对话", "plus", "btn")}<p>历史会话 · ${state.sessions.length}</p>${[
+  return `<div class="chat-layout"><aside class="chat-sidebar" aria-label="历史会话">${button("new-chat", "新对话", "plus", "btn")}${[
     ...state.sessions,
   ]
     .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
     .map(
       (s) =>
-        `<a href="#chat/${s.id}" class="session-link ${session?.id === s.id ? "active" : ""}" ${session?.id === s.id ? 'aria-current="page"' : ""} title="${e(s.title)}">${e(s.title)}<small>${dateText(s.updatedAt)} · 本地保存</small></a>`,
+        `<a href="#chat/${s.id}" class="session-link ${session?.id === s.id ? "active" : ""}" ${session?.id === s.id ? 'aria-current="page"' : ""} title="${e(s.title)}">${e(s.title)}<small>${dateText(s.updatedAt)}</small></a>`,
     )
     .join(
       "",
-    )}${!state.sessions.length ? '<p class="empty-history">还没有会话，<br>从一个小问题开始吧。</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新的一段思考"}</h1><div><span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span>${session ? iconButton("export-session", "导出会话", "download", `data-id="${session.id}"`) + iconButton("delete-session", "删除会话", "trash", `data-id="${session.id}"`) : ""}</div></div><div class="messages" id="messages">${
+    )}${!state.sessions.length ? '<p class="empty-history">暂无会话</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新对话"}</h1><div>${session ? rowActions("会话操作",
+    button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
+    button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div></div><div class="messages" id="messages" data-session-id="${e(session?.id || "")}">${
     session
       ? session.messages
           .map(
@@ -746,42 +816,40 @@ function chatPage() {
               `<article class="message ${m.role}"><div class="avatar">${m.role === "user" ? "我" : icon("spark")}</div><div class="message-body"><div class="message-label">${m.role === "user" ? "你" : `智作台 <span class="demo-badge">${m.demo ? "历史演示消息" : e(m.model)}</span>`}<time datetime="${e(m.createdAt)}">${dateText(m.createdAt, true)}</time></div><div class="message-content">${m.role === "user" ? e(m.content) : markdown(m.content)}</div><div class="message-actions">${button("copy-message", `${icon("copy")} 复制`, "", "btn btn-quiet", `data-id="${m.id}"`)}${m.role === "assistant" ? button("regenerate", `${icon("refresh")} 重新生成`, "", "btn btn-quiet", `data-id="${m.id}"`) : ""}</div></div></article>`,
           )
           .join("")
-      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div><h2>让每个想法，都有回响。</h2><p>写下一个问题，或选一个方向开始。<br><span data-model-summary>${e(activeModel().ready ? "已连接 " + activeModel().provider + " · " + activeModel().model : activeModel().message)}</span></p><div class="suggestions">${STARTERS.filter(
-          (s) => s.id !== "translate",
-        )
-          .map((s) =>
-            button(
-              "starter",
-              e(s.title),
-              s.icon,
-              "suggestion",
-              `data-id="${s.id}"`,
-            ),
-          )
-          .join("")}</div></div>`
-  }${chatRequestNotice(session)}</div><div class="chat-composer">${composer()}<div class="privacy-line">${icon("shield")}${e(modelPrivacy())}</div></div></section></div>`;
+      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div>${starterButtons()}</div>`
+  }${chatRequestNotice(session)}</div><div class="chat-composer">${composer()}</div></section></div>`;
 }
 function settingsPage() {
-  return (
-    heading("设置", "管理你的账号、工作空间与使用偏好。") +
-    `<div class="settings-grid">${accountSettings()}${workspaceSettings()}<div>${serverSettings()}<section class="settings-card"><h2>${icon("sun")}外观与偏好</h2><p>让工作台呈现你喜欢的样子。</p><div class="setting-row"><div><strong>界面主题</strong><small>跟随系统或选择固定主题</small></div><div class="segmented" role="group" aria-label="界面主题">${[
-      ["light", "浅色"],
-      ["dark", "深色"],
-      ["system", "系统"],
-    ]
-      .map(([id, label]) =>
-        button(
-          "theme",
-          label,
-          "",
-          state.settings.theme === id ? "active" : "",
-          `data-id="${id}" aria-pressed="${state.settings.theme === id}"`,
-        ),
-      )
-      .join(
-        "",
-      )}</div></div><div class="setting-row"><div><strong>默认助手</strong><small>选择通用、写作或编程风格；实际模型跟随服务端设置</small></div><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div></section><section class="settings-card"><h2>${icon("spark")}模型连接</h2><p>模型配置由智作台服务端统一管理，保存后自动同步。</p><div class="connection-state"><strong>AI 模型服务</strong><span class="status-pill" data-model-label>${e(activeModel().ready ? activeModel().model : "等待配置")}</span></div>${notice("发送消息时，对话上下文和你选入的文本会发送给服务端配置的模型服务。API 密钥仅由服务端使用，不下发到浏览器。")}<div class="setting-row">${button("connection-help", "查看接入说明", "arrow", "btn")}</div></section><section class="settings-card"><h2>${icon("shield")}本地数据</h2><p>${sync?.mode === "server" ? "内容保存在本机数据库，容器重建后继续保留。也可以导出 JSON 备份并在需要时恢复。" : "内容保存在当前浏览器，清理浏览器前请导出 JSON 备份。"}</p><div class="settings-actions">${button("export-all", "导出全部数据", "download", "btn")}${button("import-backup", "恢复备份", "upload", "btn")}${button("reset", "重置工作台", "trash", "btn btn-danger")}</div><input type="file" id="backup-input" accept="application/json,.json" hidden /></section></div><aside><section class="settings-card"><h2>${icon("help")}使用帮助</h2><ol class="help-list"><li>在提示词库点亮星标，常用方法就会出现在首页。</li><li>用全局搜索查找提示词、历史对话与资料正文。</li><li>在知识库添加文本，可将内容带入对话输入框。</li><li>按 Ctrl / ⌘ + K 打开搜索，按 Esc 关闭弹窗。</li></ol><div class="settings-actions">${button("help", "打开使用帮助", "help", "btn")}</div></section><section class="settings-card"><h2>${icon("layers")}关于智作台</h2><p>一个让创作、思考与日常工作从容发生的 AI 工作空间。</p><div class="connection-state"><span>版本</span><strong>0.3.0 · 本地服务版</strong></div></section></aside></div>`
-  );
+  const themes = [["light", "浅色"], ["dark", "深色"], ["system", "系统"]];
+  const themePicker = themes.map(([id, label]) => button("theme", label, "", state.settings.theme === id ? "active" : "",
+    `data-id="${id}" aria-pressed="${state.settings.theme === id}"`)).join("");
+  return heading("设置") +
+    `<div class="settings-grid">
+      ${accountSettings()}
+      <section class="settings-card">
+        <h2>${icon("sun")}外观与偏好</h2>
+        <div class="setting-row"><strong>界面主题</strong><div class="segmented" role="group" aria-label="界面主题">${themePicker}</div></div>
+        <div class="setting-row"><strong>默认助手</strong><select class="input" data-setting="model" aria-label="默认助手">${modelOptions()}</select></div>
+      </section>
+      ${workspaceSettings()}
+      <section class="settings-card data-settings">
+        <h2>${icon("download")}数据与备份</h2>
+        <div class="settings-actions">
+          ${button("export-all", "导出全部数据", "download", "btn btn-tinted")}
+          ${button("import-backup", "恢复备份", "upload", "btn")}
+          ${rowActions("更多数据操作", button("reset", "重置工作台", "trash", "btn btn-quiet menu-danger"))}
+        </div>
+        <input type="file" id="backup-input" accept="application/json,.json" hidden />
+      </section>
+      ${serverSettings()}
+      <section class="settings-card help-settings">
+        <h2>${icon("help")}使用帮助</h2>
+        <div class="settings-actions">
+          ${button("help", "打开使用帮助", "arrow", "btn")}
+          ${button("prompt-guide", "提问示例", "bulb", "btn btn-quiet")}
+        </div>
+      </section>
+    </div>`;
 }
 function accountSettings() {
   const user = sync?.authenticated ? sync.user : null;
@@ -789,31 +857,47 @@ function accountSettings() {
   const account = user?.account || (sync?.mode === "local" ? "浏览器模式" : "未登录");
   return `<section class="settings-card account-settings" data-account-management aria-labelledby="account-settings-title">
     <h2 id="account-settings-title">${icon("shield")}账号管理</h2>
-    <p>${enabled ? "管理当前登录账号，或登录其他账号进入独立工作空间。" : "连接并登录工作台后，可在这里管理账号。"}</p>
-    <div class="account-summary"><span class="account-avatar" aria-hidden="true">${e(user?.account?.slice(0, 1).toUpperCase() || "我")}</span>
-      <div class="account-identity"><strong data-current-account>${e(account)}</strong><small data-current-email>${e(user?.email || (enabled ? "未设置邮箱" : "尚未连接账号"))}</small></div>
-      ${enabled ? '<span class="account-current-badge">当前账号</span>' : ""}
+    <div class="account-summary">
+      <span class="account-avatar" aria-hidden="true">${e(user?.account?.slice(0, 1).toUpperCase() || "我")}</span>
+      <div class="account-identity"><strong data-current-account>${e(account)}</strong>${user?.email ? `<small data-current-email>${e(user.email)}</small>` : ""}</div>
     </div>
-    <div class="settings-actions"><button type="button" class="btn btn-primary" data-sync="add-account" ${enabled ? "" : "disabled"}>${icon("plus")}添加其他账号登录</button><button type="button" class="btn" data-sync="logout" ${enabled ? "" : "disabled"}>退出当前账号</button></div>
-    <p class="account-help">各账号的内容独立保存，切换账号后可继续访问原有数据。</p>
+    <div class="settings-actions">
+      <button type="button" class="btn btn-tinted" data-sync="add-account" ${enabled ? "" : "disabled"}>${icon("plus")}添加其他账号登录</button>
+      <button type="button" class="btn btn-quiet" data-sync="logout" ${enabled ? "" : "disabled"}>退出当前账号</button>
+    </div>
   </section>`;
 }
 function workspaceSettings() {
   return `<section class="settings-card settings-workspace" data-settings-workspace aria-labelledby="workspace-settings-title">
     <h2 id="workspace-settings-title">${icon("layers")}我的工作空间</h2>
-    <p>${sync?.mode === "server" ? "当前账号的创作与资料概览。" : "当前浏览器中保存的创作与资料概览。"}</p>
     <div class="settings-workspace-stats">
-      <div><strong>${state.prompts.filter(p => p.favorite).length}</strong><span>收藏提示词</span></div>
-      <div><strong>${state.documents.length}</strong><span>知识资料</span></div>
-      <div><strong>${state.sessions.length}</strong><span>累计对话</span></div>
+      <a href="#prompts"><strong>${state.prompts.filter(prompt => prompt.favorite).length}</strong><span>收藏提示词</span></a>
+      <a href="#knowledge"><strong>${state.documents.length}</strong><span>知识资料</span></a>
+      <a href="#tasks"><strong>${state.sessions.length}</strong><span>累计对话</span></a>
     </div>
-    <p class="workspace-settings-note">数据导出、备份与恢复可在下方“本地数据”中管理。</p>
   </section>`;
 }
 function serverSettings() {
-  return `<section class="settings-card"><h2>${icon("shield")}本机服务器</h2><p>${sync?.mode === "server" ? "会话、提示词、资料与设置由本机数据库统一保存，其他已登录页面会自动同步。" : "静态部署使用浏览器保存。运行本机 Docker 服务后可启用数据库与自动同步。"}</p><div class="connection-state"><span>保存状态</span><strong data-server-label>${e(sync?.label || "正在连接")}</strong></div><div class="connection-state"><span>运行版本</span><strong data-server-version>${e(sync?.version?.slice(0, 12) || "静态演示版")}</strong></div><div class="settings-actions"><button type="button" class="btn" data-sync="retry">重新连接</button></div></section>`;
+  const model = activeModel();
+  return `<section class="settings-card">
+    <h2>${icon("shield")}连接</h2>
+    <div class="setting-row"><strong>模型</strong><span data-model-label>${e(model.ready ? model.model : "模型未就绪")}</span></div>
+    <div class="setting-row"><strong>保存状态</strong><span data-server-label>${e(sync?.label || "正在连接")}</span></div>
+    <details class="inline-details connection-details">
+      <summary>版本与连接详情</summary>
+      <div class="setting-row"><strong>运行版本</strong><code data-server-version>${e(sync?.version?.slice(0, 12) || "静态版")}</code></div>
+      <div class="settings-actions">
+        <button type="button" class="btn" data-sync="retry">${icon("refresh")}重新连接</button>
+        ${button("connection-help", "模型接入", "arrow", "btn btn-quiet")}
+      </div>
+    </details>
+  </section>`;
 }
 function render() {
+  const showCalls = app.querySelector(".plugin-recent")?.open;
+  const previousMessages = app.querySelector("#messages");
+  const previousTop = previousMessages?.scrollTop;
+  const wasReading = previousMessages && previousMessages.scrollHeight - previousMessages.clientHeight - previousTop > 24;
   const textarea = document.querySelector("#message-input");
   if (textarea) drafts.set(textarea.form.dataset.draft, textarea.value);
   const { page } = route();
@@ -821,18 +905,22 @@ function render() {
   const title = nav.find((n) => n[0] === page)[1];
   document.title = `${title} · 智作台`;
   document.body.classList.remove("sidebar-open");
-  app.innerHTML = `<div class="app-shell"><aside class="sidebar" id="sidebar" aria-label="主导航"><a class="brand" href="#home" aria-label="智作台首页"><span class="brand-mark">${icon("spark")}</span><span><span class="brand-name">智作台</span><span class="brand-caption">YOUR AI WORKSPACE</span></span></a><p class="workspace-label">工作空间</p><nav aria-label="工作空间导航">${button("new-chat", "新对话", "plus", "btn btn-primary sidebar-new-chat")}${nav
+  app.innerHTML = `<div class="app-shell"><aside class="sidebar" id="sidebar" aria-label="主导航"><a class="brand" href="#home" aria-label="智作台首页"><span class="brand-mark">${icon("spark")}</span><span><span class="brand-name">智作台</span></span></a><nav aria-label="工作空间导航">${button("new-chat", "新对话", "plus", "btn btn-primary sidebar-new-chat")}${nav
     .filter(([id]) => id !== "settings")
     .map(
       ([id, label, name]) =>
-        `<a class="nav-link ${page === id ? "active" : ""}" href="#${id}" ${page === id ? 'aria-current="page"' : ""}>${icon(name)}${label}${id === "prompts" && page !== id ? `<span class="count">${state.prompts.length}</span>` : ""}</a>`,
+        `<a class="nav-link ${page === id ? "active" : ""}" href="#${id}" ${page === id ? 'aria-current="page"' : ""}>${icon(name)}${label}</a>`,
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置<small>账号、工作空间与偏好</small></span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航" tabindex="-1"></button><div class="workspace"><header class="topbar">${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle", 'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span>/</span><span>${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索工作空间…</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<span class="server-sync-label" data-server-label>${e(sync?.label || "正在连接服务器")}</span><span class="demo-badge" data-model-label>${e(activeModel().ready ? activeModel().model : "模型未就绪")}</span></div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}${page === "chat" ? "" : '<footer class="footer"><span>智作台 · 让想法有处落地</span><span>为每一份专注而设计 &nbsp; / &nbsp; 本地服务版 0.3</span></footer>'}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置</span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航" tabindex="-1"></button><div class="workspace"><header class="topbar">${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle", 'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span class="mobile-page-name">${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a></div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
+  if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
   const messages = document.querySelector("#messages");
-  if (messages) messages.scrollTop = messages.scrollHeight;
+  if (messages) {
+    const sameConversation = messages.dataset.sessionId === previousMessages?.dataset.sessionId;
+    messages.scrollTop = sameConversation && wasReading ? previousTop : messages.scrollHeight;
+  }
   if (focusNewConversation && page === "chat" && !route().id) {
     focusNewConversation = false;
     requestAnimationFrame(() => {
@@ -869,8 +957,8 @@ function confirmDialog(title, description, label, fn) {
 function promptEditor(id = "") {
   const p = state.prompts.find((p) => p.id === id);
   openDialog(
-    p ? "查看与编辑提示词" : "创建你的提示词",
-    `<form id="prompt-form" class="dialog-body" data-id="${p?.id || ""}"><label>名称<input class="input" name="title" maxlength="80" required value="${e(p?.title || "")}" placeholder="给这个好方法取个名字" /></label><label>分类<select class="input" name="category">${CATEGORIES.map((c) => `<option ${p?.category === c ? "selected" : ""}>${c}</option>`).join("")}</select></label><label>一句话描述<input class="input" name="description" maxlength="200" value="${e(p?.description || "")}" placeholder="它能帮你完成什么？" /></label><label>提示词内容<textarea class="input" name="content" maxlength="20000" required placeholder="写下角色、背景和你期待的结果…">${e(p?.content || "")}</textarea></label><p class="field-help">使用时会带入对话输入框，你可以补充背景再发送。</p><p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${p ? button("delete-prompt", "删除", "trash", "btn btn-danger", `data-id="${p.id}"`) : ""}${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存提示词</button></div></form>`,
+    p ? "编辑提示词" : "新建提示词",
+    `<form id="prompt-form" class="dialog-body" data-id="${p?.id || ""}"><label>名称<input class="input" name="title" maxlength="80" required value="${e(p?.title || "")}" /></label><label>分类<select class="input" name="category">${CATEGORIES.map((c) => `<option ${p?.category === c ? "selected" : ""}>${c}</option>`).join("")}</select></label><label>一句话描述<input class="input" name="description" maxlength="200" value="${e(p?.description || "")}" placeholder="选填" /></label><label>提示词内容<textarea class="input" name="content" maxlength="20000" required>${e(p?.content || "")}</textarea></label><p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${p ? button("delete-prompt", "删除", "trash", "btn btn-danger", `data-id="${p.id}"`) : ""}${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存提示词</button></div></form>`,
   );
 }
 function showDocument(id) {
@@ -878,13 +966,13 @@ function showDocument(id) {
   if (!d) return;
   openDialog(
     d.name,
-    `<div class="dialog-body"><p>${e(d.tag)} · ${d.size} 字节 · ${d.kind === "text" ? "文本已读取，仅在本地保存" : "仅保存文件信息，未上传或解析"}</p>${d.kind === "text" ? `<pre class="preview-text">${e(d.content)}</pre><div class="dialog-actions">${button("copy-document", "复制文本", "copy", "btn", `data-id="${d.id}"`)}${button("attach-document", "带入对话", "chat", "btn btn-primary", `data-id="${d.id}"`)}</div>` : notice("本版本暂不解析此格式，也未保存文件二进制内容。请将需要讨论的段落另存为 TXT 或 Markdown 后添加。")}</div>`,
+    `<div class="dialog-body"><p>${e(d.tag)} · ${d.size} 字节</p>${d.kind === "text" ? `<pre class="preview-text">${e(d.content)}</pre><div class="dialog-actions">${button("copy-document", "复制文本", "copy", "btn", `data-id="${d.id}"`)}${button("attach-document", "带入对话", "chat", "btn btn-primary", `data-id="${d.id}"`)}</div>` : notice("此格式仅保存文件信息。可将正文转为 TXT 或 Markdown 后添加。")}</div>`,
   );
 }
 function showSearch() {
   openDialog(
     "搜索工作空间",
-    `<div class="global-search-input">${icon("search")}<input type="search" id="global-search" aria-label="搜索任务、提示词、历史对话与资料" maxlength="100" placeholder="搜索任务、提示词、历史对话与资料…" autocomplete="off" autofocus /></div><div id="global-results" class="search-results" aria-live="polite">${empty("search", "把需要的内容，找回来", "输入关键词，搜索你的整个工作空间。")}</div><div class="search-help">输入关键词搜索 · Tab 选择结果 · Esc 关闭</div>`,
+    `<div class="global-search-input">${icon("search")}<input type="search" id="global-search" aria-label="搜索任务、提示词、历史对话与资料" maxlength="100" placeholder="搜索任务、提示词、历史对话与资料…" autocomplete="off" autofocus /></div><div id="global-results" class="search-results" aria-live="polite"></div>`,
     "search-dialog",
   );
   document.querySelector("#global-search").focus();
@@ -900,10 +988,8 @@ function updateSearch(query) {
         .join("")
     : empty(
         "search",
-        query.trim() ? "没有找到相关内容" : "把需要的内容，找回来",
-        query.trim()
-          ? "试试更短的关键词，或检查是否已保存。"
-          : "输入关键词，搜索你的整个工作空间。",
+        query.trim() ? "没有找到相关内容" : "输入关键词",
+        "",
       );
 }
 function draftChat(text, type = "AI 对话") {
@@ -1001,7 +1087,7 @@ async function addFiles(files) {
       "资料添加结果",
       `<div class="dialog-body"><p>已添加 ${count} 份资料。以下文件未保存：</p><div class="preview-text">${e(errors.join("\n"))}</div></div>`,
     );
-  else if (count) toast(`已在本地添加 ${count} 份资料`);
+  else if (count) toast(`已添加 ${count} 份资料`);
 }
 function syncSidebar() {
   const expanded = mobile.matches ? document.body.classList.contains("sidebar-open") : !sidebarCollapsed;
@@ -1407,16 +1493,16 @@ async function handleAction(target) {
         "请作为一名内容编辑，面向第一次接触 AI 的读者，用一个生活中的例子解释“大模型”，控制在 200 字内。",
       );
       break;
+    case "data-use":
+      openDialog("消息如何处理", `<div class="dialog-body"><p>${e(modelPrivacy())}</p><p>使用插件时，确认的参数会发送到对应服务。</p></div>`);
+      break;
     case "connection-help":
-      openDialog(
-        "关于模型接入",
-        `<div class="dialog-body"><p>工作台通过本机服务端调用真实模型，模型和密钥在服务端统一设置。</p><ol class="help-list"><li>在智作台服务端的“API 接口设置”中保存接口地址、密钥和模型 ID。</li><li>密钥由 Windows 加密保护，工作台只读取模型名称和就绪状态。</li><li>修改配置后，工作台自动同步；下次发送立即使用服务端当前配置。</li></ol><p>通用、写作和编程助手分别使用不同的提示风格。历史演示消息继续保留标记。</p></div>`,
-      );
+      openDialog("模型接入", '<div class="dialog-body"><p>在智作台服务端的“API 接口设置”中添加服务商和模型，再设为默认。</p><p>对话框也可以为下一条消息选择模型。</p></div>');
       break;
     case "help":
       openDialog(
         "欢迎使用智作台",
-        `<div class="dialog-body"><p>把常用提示词、资料和每次思考放在同一个地方。</p><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办；在插件中连接外部服务，选择对话工具并确认具体操作。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
+        `<div class="dialog-body"><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办；在插件中连接外部服务，选择对话工具并确认具体操作。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
       );
       break;
   }
@@ -1424,6 +1510,11 @@ async function handleAction(target) {
 
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
+  document.querySelectorAll(".row-actions[open]").forEach(menu => {
+    if (menu.contains(event.target) && !target) return;
+    menu.open = false;
+    if (menu.contains(target)) menu.querySelector("summary").focus();
+  });
   if (target) handleAction(target).catch((error) => toast(error.message, true));
   if (event.target.closest(".sidebar a") && mobile.matches) setMenu(false, false);
 });
@@ -1574,6 +1665,13 @@ document.addEventListener("keydown", (event) => {
   if (event.key === "Escape" && dialog.open) {
     event.preventDefault();
     closeDialog();
+    return;
+  }
+  const menu = document.querySelector(".row-actions[open]");
+  if (event.key === "Escape" && menu) {
+    event.preventDefault();
+    menu.open = false;
+    menu.querySelector("summary").focus();
     return;
   }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {

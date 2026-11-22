@@ -82,7 +82,9 @@ jobs:
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/auth-ui-check.mjs
       - name: Verify real MCP connections and conversation tools
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/plugins-ui-check.mjs
-      - name: Save login previews
+      - name: Verify management pages and responsive navigation
+        run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/admin-ui-check.mjs
+      - name: Save interface previews
         if: always()
         uses: actions/upload-artifact@v4
         with:

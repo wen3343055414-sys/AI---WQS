@@ -46,8 +46,7 @@ try {
   assert.equal(await page.getByRole("tab").count(), 3);
   assert.equal(await page.locator("#auth-account").inputValue(), "admin");
   await page.screenshot({ path: path.join(output, "login-account-desktop.png") });
-  assert.equal(await page.locator(".auth-social").count(), 3);
-  for (const social of await page.locator(".auth-social").all()) assert.equal(await social.isDisabled(), true);
+  assert.equal(await page.locator(".auth-social").count(), 0);
   await page.getByRole("button", { name: "忘记密码？", exact: true }).click();
   await page.getByRole("heading", { name: "找回密码", exact: true }).waitFor();
   await page.getByRole("heading", { name: "自助找回暂未开放", exact: true }).waitFor();
@@ -65,10 +64,10 @@ try {
   await page.keyboard.press("ArrowRight");
   assert.equal(await page.getByRole("tab", { name: "手机验证码", exact: true }).getAttribute("aria-selected"), "true");
   await page.screenshot({ path: path.join(output, "login-phone-desktop.png") });
-  await page.locator("#auth-phone").fill("13800000000");
-  await page.getByRole("button", { name: "获取验证码", exact: true }).click();
-  await page.getByRole("alert").filter({ hasText: "手机验证码登录暂未开通" }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "获取验证码", exact: true }).isDisabled(), false);
+  assert.equal(await page.locator("#auth-phone").count(), 0);
+  await page.getByText("手机验证码登录暂未开通。", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "使用账号密码", exact: true }).click();
+  await page.locator("#auth-account").waitFor();
   await page.getByRole("tab", { name: "邮箱密码", exact: true }).click();
   await page.screenshot({ path: path.join(output, "login-email-desktop.png") });
   await page.getByRole("button", { name: "去注册", exact: true }).click();
@@ -255,7 +254,7 @@ try {
   assert.equal(await historyLinks.count(), 2);
   await page.screenshot({ path: path.join(output, "navigation-history-desktop.png") });
   await page.locator('#history-results a[href="#chat/' + olderSessionId + '"]').click();
-  await page.getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
+  await page.locator("#messages").getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
   assert.equal(await page.locator("#messages .message").count(), 4);
   await page.locator('#sidebar a[href="#tasks"]').click();
   const readyDownload = page.waitForEvent("download");
@@ -338,12 +337,30 @@ try {
   await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
   assert.equal(await page.locator(".todo-item").count(), 2);
   assert.equal(await page.locator(".todo-item.is-done").count(), 1);
+  assert.equal(await page.getByRole("progressbar", { name: "完成进度" }).getAttribute("value"), "1");
   await page.screenshot({ path: path.join(output, "features-tasks-desktop.png") });
+
+  await page.goto(base + "/#knowledge");
+  await page.getByRole("heading", { name: "知识库", exact: true }).waitFor();
+  await page.locator("#file-input").setInputFiles({ name: "协作资料.txt", mimeType: "text/plain", buffer: Buffer.from("可用于对话的资料正文") });
+  const documentCard = page.locator(".document-card").filter({ hasText: "协作资料.txt" });
+  await documentCard.getByRole("heading", { name: "协作资料.txt", exact: true }).waitFor();
+  await documentCard.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await documentCard.getByRole("button", { name: "编辑标签", exact: true }).isVisible(), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await documentCard.locator("details").evaluate(element => element.open), false);
+  assert.equal(await documentCard.locator("summary").evaluate(node => node === document.activeElement), true);
+  await page.screenshot({ path: path.join(output, "workbench-knowledge-desktop.png") });
+  await documentCard.getByRole("button", { name: "查看", exact: true }).click();
+  assert.match(await page.locator(".preview-text").innerText(), /可用于对话/);
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+
 
   await page.locator('#sidebar a[href="#plugins"]').click();
   await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
   assert.equal(await page.locator(".plugin-catalog-card").count(), 2);
-  await page.getByRole("heading", { name: "连接更多工具", exact: true }).waitFor();
+  await page.getByRole("heading", { name: "连接插件", exact: true }).waitFor();
   assert.equal(await page.getByText("内置工具", { exact: true }).count(), 0);
   assert.equal((await (await context.request.get(base + "/api/plugins")).json()).connections.length, 0);
   await page.locator('[data-action="plugin-connect-github"]').click();
@@ -443,10 +460,10 @@ try {
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
-  assert.ok(await page.locator(".side-panel").evaluate(element => {
-    const note = element.querySelector(".note-card").getBoundingClientRect();
-    return Math.abs(note.width - element.getBoundingClientRect().width) < 1;
-  }), "Moving workspace statistics must not leave an empty tablet column");
+  assert.ok(await page.locator(".home-collections").evaluate(element => {
+    const sections = Array.from(element.children, section => section.getBoundingClientRect());
+    return sections.length === 2 && sections[0].top === sections[1].top && sections[0].right < sections[1].left;
+  }), "Favorites and recent conversations should share the tablet layout");
   assert.ok(await page.locator("#sidebar").evaluate(element => {
     const link = element.querySelector(".sidebar-settings").getBoundingClientRect();
     const menu = element.getBoundingClientRect();
@@ -539,6 +556,12 @@ try {
     assert.equal(await page.locator(".plugin-catalog-card").count(), 2);
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Plugins must fit mobile width");
     await page.screenshot({ path: path.join(output, "features-plugins-mobile-" + width + ".png") });
+    for (const [route, heading] of [["home", "开始对话"], ["prompts", "提示词库"], ["knowledge", "知识库"]]) {
+      await page.goto(base + "/#" + route);
+      await page.getByRole("heading", { name: heading, exact: true }).waitFor();
+      assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), route + " must fit mobile width " + width);
+      if (width === 320) await page.screenshot({ path: path.join(output, "workbench-" + route + "-mobile-320.png"), fullPage: true });
+    }
 
   }
   await page.setViewportSize({ width: 1440, height: 960 });
@@ -558,7 +581,7 @@ try {
   assert.deepEqual(errors, []);
   console.log("Sidebar toggle passed: header placement, desktop width recovery, retained messages/draft/scroll, reload and route persistence, keyboard controls, storage fallback, responsive preference isolation, and mobile toggle/backdrop/Escape/focus handling.");
   console.log("Task and plugin catalog checks passed: navigation order, help relocation, create/edit/complete/filter/delete, real connection entry, masked credentials, empty account catalog and mobile layouts.");
-  console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
+  console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, clear unavailable SMS state and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {
   if (browser) await browser.close();
   if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill(); await stopped; }

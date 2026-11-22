@@ -9,8 +9,6 @@ const symbols = {
   eye: '<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7S2 12 2 12Z"/><circle cx="12" cy="12" r="3"/>',
   hidden: '<path d="m3 3 18 18M10.6 5.1A11 11 0 0 1 12 5c6 0 10 7 10 7a18 18 0 0 1-3.1 3.8M6 6.5A23 23 0 0 0 2 12s4 7 10 7a12 12 0 0 0 5.5-1.5"/>',
   arrow: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
-  chat: '<path d="M21 11a8 8 0 0 1-8 8H5l-3 3V11a9.5 9.5 0 0 1 19 0Z"/><path d="M7 9h9m-9 4h6"/>',
-  spark: '<path d="m12 2 3 7 7 3-7 3-3 7-3-7-7-3 7-3 3-7Z"/>',
 };
 const icon = name => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${symbols[name]}</svg>`;
 const methods = [["account", "账号密码"], ["sms", "手机验证码"], ["email", "邮箱密码"]];
@@ -59,13 +57,6 @@ const illustration = mode => `<svg class="auth-illustration" viewBox="0 0 360 29
 <path d="m298 40 3 8 8 3-8 3-3 8-3-8-8-3 8-3 3-8Z" fill="#8eb6ff"/><path d="m51 86 2 6 6 2-6 2-2 6-2-6-6-2 6-2 2-6Z" fill="#a5c7ff"/>
 <circle cx="308" cy="132" r="3" fill="#9bbcff"/><circle cx="85" cy="29" r="3" fill="#bed4ff"/>
 </svg>`;
-const socialIcons = {
-  wechat: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#22b84f" d="M9.4 3C4.2 3 1 6 1 9.6c0 2.1 1.1 4 3.2 5.2l-.8 2.4 3-1.4c.9.3 1.9.4 3 .4 5.1 0 8.4-2.9 8.4-6.6S14.5 3 9.4 3Z"/><path fill="#49cf71" stroke="#fff" stroke-width=".7" d="M16.1 10c-4.1 0-6.9 2.4-6.9 5.4s2.8 5.3 6.9 5.3c.7 0 1.5-.1 2.2-.3l2.5 1.2-.6-2c1.8-1 2.8-2.5 2.8-4.2 0-3-2.8-5.4-6.9-5.4Z"/><circle cx="6.3" cy="8" r="1" fill="#fff"/><circle cx="12.3" cy="8" r="1" fill="#fff"/><circle cx="13.7" cy="14.5" r=".8" fill="#fff"/><circle cx="18.5" cy="14.5" r=".8" fill="#fff"/></svg>',
-  google: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#4285f4" d="M21.6 12.2c0-.7-.1-1.4-.2-2.1H12v4h5.4a4.6 4.6 0 0 1-2 3v2.6h3.3c1.9-1.7 2.9-4.3 2.9-7.5Z"/><path fill="#34a853" d="M12 22c2.7 0 5-.9 6.7-2.3l-3.3-2.6c-.9.6-2 .9-3.4.9a6 6 0 0 1-5.7-4.2H2.9v2.7A10 10 0 0 0 12 22Z"/><path fill="#fbbc05" d="M6.3 13.8a6 6 0 0 1 0-3.6V7.5H2.9a10 10 0 0 0 0 9l3.4-2.7Z"/><path fill="#ea4335" d="M12 6c1.5 0 2.9.5 3.9 1.5l2.9-2.9A9.8 9.8 0 0 0 12 2a10 10 0 0 0-9.1 5.5l3.4 2.7A6 6 0 0 1 12 6Z"/></svg>',
-  apple: '<svg viewBox="0 0 24 24" aria-hidden="true"><path fill="#29364b" d="M15.8 5.1c.9-1.1.8-2.6.8-2.6s-1.5.1-2.5 1.2c-1 1.1-.9 2.5-.9 2.5s1.5.1 2.6-1.1Zm3.4 12.6c-.6 1.3-.9 1.8-1.7 2.9-1.1 1.5-2.6 3.3-4.5 2.3-1.6-.8-2-.8-3.5 0-1.8.9-3.3-.8-4.4-2.3C2 16.2 1.5 11.7 3.5 8.8c1.5-2.1 3.8-2.3 5.4-1.8 1.2.4 2 .9 2.4.9.4 0 1.3-.6 2.7-1 1.3-.4 3.3-.3 4.8 1.3-4.2 2.3-3.5 8.3.4 9.5Z" transform="translate(1 -.6) scale(.91)"/></svg>',
-};
-const thirdParty = () => `<div class="auth-other"><p class="auth-divider">其他登录方式</p><div class="auth-socials">${[["wechat", "微信"], ["google", "Google"], ["apple", "Apple"]].map(([key, name]) => `<button type="button" class="auth-social" aria-label="${name}登录（暂未开通）" title="${name}登录暂未开通" disabled>${socialIcons[key]}</button>`).join("")}</div><p class="auth-social-note">第三方登录暂未开通</p></div>`;
-
 export class AuthDialog {
   constructor({ request, onAuthenticated, onCancel }) {
     this.request = request;
@@ -91,13 +82,16 @@ export class AuthDialog {
       if (!target || this.busy) return;
       const action = target.dataset.auth;
       if (action === "cancel") { this.cancel(); return; }
-      if (action === "method") this.switchMethod(target.dataset.method);
+      if (action === "method") {
+        this.switchMethod(target.dataset.method);
+        this.element.querySelector(`[aria-selected="true"]`)?.focus();
+      }
       if (["register", "login", "recover"].includes(action)) {
         this.capture();
         this.registration = action === "register";
         this.recovery = action === "recover";
         this.render();
-        this.element.querySelector("input, .auth-recovery-back")?.focus();
+        this.element.querySelector("input, .auth-recovery-back, [aria-selected='true']")?.focus();
       }
       if (action === "password") {
         const input = this.element.querySelector('[name="' + target.dataset.field + '"]');
@@ -135,7 +129,7 @@ export class AuthDialog {
     if (this.drafts.account === undefined && legacyAccount) this.drafts.account = legacyAccount;
     this.render();
     if (!this.element.open) this.element.showModal();
-    this.element.querySelector('input')?.focus();
+    (this.element.querySelector('input') || this.element.querySelector('[aria-selected="true"]'))?.focus();
   }
   close() {
     if (this.element.open) this.element.close();
@@ -172,61 +166,60 @@ export class AuthDialog {
     const autocomplete = password ? (this.registration ? "new-password" : "current-password") : name === "email" ? "email" : "username";
     return `<div class="auth-field"><label for="auth-${name}">${label}</label><div class="auth-input-wrap">${icon(symbol)}<input id="auth-${name}" name="${name}" type="${type}" autocomplete="${autocomplete}" placeholder="${placeholder}" value="${password ? "" : e(drafts[name] || "")}" maxlength="${password ? 128 : name === "email" ? 254 : 32}" ${password && this.registration ? 'minlength="10"' : ""} required />${password ? `<button type="button" class="auth-eye" data-auth="password" data-field="${name}" aria-label="显示密码" aria-pressed="false">${icon("eye")}</button>` : ""}</div></div>`;
   }
-  story(mode) {
-    const copy = mode === "register"
-      ? ["从这里，开启新灵感", "创建你的账号，<br>让好想法拥有自己的空间。"]
-      : mode === "recovery"
-        ? ["找回连接，继续灵感", "每一份专注与创作，<br>都值得被妥善保存。"]
-        : mode === "sms"
-          ? ["轻松验证，即刻开始", "更便捷地连接你的工作空间，<br>继续下一段灵感旅程。"]
-          : ["一个账号，连接每份灵感", "对话、知识与每一个好想法，<br>在这里，有序相遇。"];
-    return `<aside class="auth-story">
-      <div class="auth-brand"><span class="auth-logo">智</span><span>智作台<small>YOUR AI WORKSPACE</small></span></div>
-      <div class="auth-story-content"><div class="auth-visual">${illustration(mode)}</div><div class="auth-story-copy"><h2>${copy[0]}</h2><p>${copy[1]}</p></div></div>
-      <p class="auth-story-footer"><span>${icon("chat")}对话创作</span><span>${icon("spark")}灵感管理</span><span>${icon("mail")}知识整理</span></p>
-    </aside>`;
-  }
   frame(content, mode) {
-    return `<div class="auth-layout auth-${mode}">${this.story(mode)}<section class="auth-panel">
-      <div class="auth-mobile-brand"><span class="auth-logo">智</span><span>智作台</span></div>
-      ${content}${this.cancellable ? '<p class="auth-cancel-return"><button type="button" class="auth-text-link" data-auth="cancel">返回当前账号</button></p>' : ""}<p class="auth-panel-footer">智作台 · 让每一个好想法，有处安放。</p>
-    </section></div>`;
+    return `<div class="auth-layout auth-${mode}">
+      <aside class="auth-story">
+        <div class="auth-brand"><span class="auth-logo">智</span><span>智作台</span></div>
+        <div class="auth-story-content"><div class="auth-visual">${illustration(mode)}</div></div>
+      </aside>
+      <section class="auth-panel">
+        <div class="auth-mobile-brand"><span class="auth-logo">智</span><span>智作台</span></div>
+        ${content}
+        ${this.cancellable ? '<p class="auth-cancel-return"><button type="button" class="auth-text-link" data-auth="cancel">返回当前账号</button></p>' : ""}
+      </section>
+    </div>`;
   }
   render() {
     if (this.recovery) {
-      this.element.innerHTML = this.frame(`<header class="auth-heading"><h1 id="auth-title">找回密码</h1><p>为你的账号，找回熟悉的工作空间。</p></header>
-        <div class="auth-recovery-card">${icon("lock")}<h2>自助找回暂未开放</h2><p>暂不支持通过邮箱或手机自助重置密码。请确认账号信息后重试，或联系工作台管理员寻求帮助。</p></div>
+      this.element.innerHTML = this.frame(`<header class="auth-heading"><h1 id="auth-title">找回密码</h1></header>
+        <div class="auth-recovery-card">${icon("lock")}<h2>自助找回暂未开放</h2><p>请联系工作台管理员重置密码。</p></div>
         <button type="button" class="auth-submit auth-recovery-back" data-auth="login"><span>返回登录</span>${icon("arrow")}</button>
         <p class="auth-switch">没有账号？ <button type="button" class="auth-text-link" data-auth="register">去注册</button></p>`, "recovery");
       return;
     }
     const register = this.registration;
-    const password = () => this.field("password", "密码", register ? "设置密码，至少 10 个字符" : "请输入密码", "password", "lock");
+    const password = () => this.field("password", "密码", register ? "至少 10 个字符" : "", "password", "lock");
     let fields;
     if (register) {
-      fields = this.field("account", "账号", "设置你的账号") +
+      fields = this.field("account", "账号", "") +
         '<p class="auth-field-hint">3–32 位字母、数字、下划线或短横线</p>' +
-        this.field("email", "邮箱", "请输入邮箱地址", "email", "mail") + password() +
-        this.field("confirm", "确认密码", "请再次输入密码", "password", "lock");
+        this.field("email", "邮箱", "name@example.com", "email", "mail") + password() +
+        this.field("confirm", "确认密码", "", "password", "lock");
     } else if (this.method === "sms") {
       fields = `<div class="auth-field"><label for="auth-phone">手机号</label><div class="auth-input-wrap auth-phone-wrap">${icon("phone")}<span class="auth-country">+86</span><input id="auth-phone" name="phone" type="tel" inputmode="tel" autocomplete="tel-national" placeholder="请输入手机号" value="${e(this.drafts.phone || "")}" maxlength="11" pattern="1[3-9][0-9]{9}" required /></div></div>
         <div class="auth-field"><label for="auth-code">验证码</label><div class="auth-input-wrap auth-code-wrap">${icon("key")}<input id="auth-code" name="code" inputmode="numeric" autocomplete="one-time-code" placeholder="请输入 6 位验证码" maxlength="6" pattern="[0-9]{6}" required /><button type="button" class="auth-send-code" data-auth="send-code" ${this.remaining ? "disabled" : ""}>${this.remaining ? this.remaining + "s 后重试" : "获取验证码"}</button></div></div>`;
     } else {
-      fields = this.method === "email" ? this.field("email", "邮箱", "请输入邮箱地址", "email", "mail") + password()
-        : this.field("account", "账号", "请输入账号", "text", "user") + password();
+      fields = this.method === "email" ? this.field("email", "邮箱", "name@example.com", "email", "mail") + password()
+        : this.field("account", "账号", "", "text", "user") + password();
     }
-    const heading = `<header class="auth-heading"><h1 id="auth-title">${register ? "创建你的账号" : this.switchingAccount ? "登录其他账号" : this.method === "sms" ? "验证码登录" : "欢迎登录"}</h1><p>${register ? "加入智作台，让好想法从这里开始。" : this.switchingAccount ? "登录成功后，将切换到该账号的工作空间。" : this.method === "sms" ? "通过手机验证码，便捷登录工作空间。" : "登录你的账号，开启更有序的创作。"}</p></header>`;
+    const heading = `<header class="auth-heading"><h1 id="auth-title">${register ? "创建你的账号" : this.switchingAccount ? "登录其他账号" : "登录"}</h1></header>`;
     const tabs = register ? "" : `<div class="auth-tabs" role="tablist" aria-label="登录方式">${methods.map(([key, label]) => `<button type="button" role="tab" id="auth-tab-${key}" aria-controls="auth-form" aria-selected="${this.method === key}" tabindex="${this.method === key ? 0 : -1}" data-auth="method" data-method="${key}">${label}</button>`).join("")}</div>`;
-    const options = register ? '<p class="auth-register-note">请使用常用邮箱，并妥善保管你的账号和密码。</p>'
-      : this.method === "sms" ? (this.smsEnabled ? "" : '<p class="auth-method-note">验证码登录暂未开通，可使用账号或邮箱密码登录。</p>')
+    const options = register || this.method === "sms" ? ""
       : `<div class="auth-login-options"><label class="auth-remember" for="auth-remember"><input id="auth-remember" name="remember" type="checkbox" ${this.remember ? "checked" : ""} />记住账号</label><button type="button" class="auth-text-link" data-auth="recover">忘记密码？</button></div>`;
     const form = `<form class="auth-form" id="auth-form" ${register ? 'aria-label="注册账号"' : `role="tabpanel" aria-labelledby="auth-tab-${this.method}"`}>
       <div class="auth-fields">${fields}</div>${options}<p class="server-auth-error" id="auth-error" role="alert" aria-live="polite"></p>
       <button type="submit" class="auth-submit"><span>${register ? "注册并登录" : "登录"}</span>${icon("arrow")}</button>
     </form>`;
     const switcher = `<p class="auth-switch">${register ? "已有账号？" : "没有账号？"} <button type="button" class="auth-text-link" data-auth="${register ? "login" : "register"}">${register ? "去登录" : "去注册"}</button></p>`;
-    this.element.innerHTML = this.frame(heading + tabs + form + (register ? "" : thirdParty()) + switcher, register ? "register" : this.method);
-    this.element.querySelector("form").addEventListener("submit", event => this.submit(event));
+    const smsUnavailable = !register && this.method === "sms" && !this.smsEnabled;
+    const panel = smsUnavailable
+      ? `<section id="auth-form" role="tabpanel" aria-labelledby="auth-tab-sms" class="auth-method-panel">
+          <p>手机验证码登录暂未开通。</p>
+          <button type="button" class="auth-text-link" data-auth="method" data-method="account">使用账号密码</button>
+        </section>`
+      : form;
+    this.element.innerHTML = this.frame(heading + tabs + panel + switcher, register ? "register" : this.method);
+    this.element.querySelector("form")?.addEventListener("submit", event => this.submit(event));
   }
   error(message) {
     const output = this.element.querySelector("#auth-error");
