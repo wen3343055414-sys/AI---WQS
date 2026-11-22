@@ -364,7 +364,8 @@ function conversationList(sessions, filtered = false) {
     filtered ? "" : button("new-chat", "新对话", "plus", "btn"),
   );
   return `<ul class="conversation-list" aria-label="历史对话列表">${sessions.map(session => {
-    const content = session.messages.at(-1)?.content || "";
+    const last = session.messages.at(-1);
+    const content = (last?.demo ? session.messages.findLast(message => message.role === "user") : last)?.content || "";
     const preview = Array.from(content.replace(/\s+/g, " ")).slice(0, 120).join("");
     return `<li><a class="conversation-link" href="#chat/${e(session.id)}" aria-label="继续对话：${e(session.title)}">
       <span class="conversation-symbol">${icon("chat")}</span>
@@ -375,9 +376,21 @@ function conversationList(sessions, filtered = false) {
   }).join("")}</ul>`;
 }
 function starterButtons() {
-  return `<div class="starter-buttons" aria-label="对话快捷方式">${STARTERS.map(starter =>
+  return `<div class="starter-buttons" role="group" aria-label="对话快捷方式">${STARTERS.map(starter =>
     button("starter", e(starter.title), starter.icon, "btn starter-button", `data-id="${starter.id}"`),
   ).join("")}</div>`;
+}
+function favoriteRow(prompt) {
+  const [tone, symbol] = categoryStyle[prompt.category] || ["purple", "file"];
+  const target = `data-id="${e(prompt.id)}"`;
+  return `<article class="favorite-row">
+    <span class="tile-icon tone-${tone}">${icon(symbol)}</span>
+    <span class="favorite-row-copy"><strong>${e(prompt.title)}</strong>${prompt.description ? `<small>${e(prompt.description)}</small>` : ""}</span>
+    ${button("use-prompt", "使用", "arrow", "btn btn-tinted", `${target} aria-label="使用提示词：${e(prompt.title)}"`)}
+    ${rowActions("提示词操作：" + prompt.title,
+      button("view-prompt", "编辑", "pen", "btn btn-quiet", target),
+      button("favorite", "取消收藏", "star", "btn btn-quiet", target))}
+  </article>`;
 }
 function homePage() {
   const favorites = state.prompts.filter(prompt => prompt.favorite).slice(0, 3);
@@ -389,7 +402,7 @@ function homePage() {
   <div class="home-collections">
     <section>
       ${section("收藏提示词", '<a class="btn btn-quiet" href="#prompts">提示词库 ' + icon("arrow") + "</a>")}
-      ${favorites.length ? `<div class="home-favorites">${favorites.map(promptCard).join("")}</div>` : empty("star", "暂无收藏", "")}
+      ${favorites.length ? `<div class="home-favorites">${favorites.map(favoriteRow).join("")}</div>` : empty("star", "暂无收藏", "")}
     </section>
     <section>
       ${section("最近对话", '<a class="btn btn-quiet" href="#tasks">全部对话 ' + icon("arrow") + "</a>")}
@@ -592,7 +605,7 @@ function pluginsPage() {
 function pluginConnector(kind = "custom") {
   if (!sync?.authenticated || sync.mode !== "server") throw new Error("请先登录工作台。");
   const github = kind === "github";
-  const name = `<label>连接名称<input class="input" name="name" maxlength="80" required value="${github ? "GitHub" : ""}" /></label>`;
+  const name = `<label>连接名称<input class="input" name="name" maxlength="80" ${github ? "" : "required"} value="${github ? "GitHub" : ""}" /></label>`;
   const endpoint = `<label>MCP 地址<input class="input" name="endpoint" type="url" maxlength="2000" required value="${github ? "https://api.githubcopilot.com/mcp/" : ""}" ${github ? "readonly" : 'placeholder="https://example.com/mcp"'} /></label>`;
   const token = `<label id="plugin-token-label" ${github ? "" : "hidden"}>${github ? "GitHub 个人访问令牌" : "授权令牌"}<input class="input" name="token" type="password" maxlength="4096" autocomplete="off" spellcheck="false" data-plugin-secret ${github ? "required autofocus" : ""} /></label>`;
   openDialog(github ? "连接 GitHub" : "添加 MCP 服务",
@@ -664,7 +677,7 @@ async function handlePluginForm(form, data) {
   try {
     if (form.id === "plugin-connect-form") {
       const value = await pluginRequest("/api/plugins/connect", { kind: form.dataset.kind,
-        name: String(data.get("name")), endpoint: String(data.get("endpoint")),
+        name: String(data.get("name")).trim() || (form.dataset.kind === "github" ? "GitHub" : ""), endpoint: String(data.get("endpoint")),
         authMode: String(data.get("authMode")), token: String(data.get("token") || "") });
       form.querySelector("[data-plugin-secret]").value = "";
       if (!value || cycle !== chatAccountCycle) return;
@@ -1074,7 +1087,7 @@ async function addFiles(files) {
       "资料添加结果",
       `<div class="dialog-body"><p>已添加 ${count} 份资料。以下文件未保存：</p><div class="preview-text">${e(errors.join("\n"))}</div></div>`,
     );
-  else if (count) toast(`已在本地添加 ${count} 份资料`);
+  else if (count) toast(`已添加 ${count} 份资料`);
 }
 function syncSidebar() {
   const expanded = mobile.matches ? document.body.classList.contains("sidebar-open") : !sidebarCollapsed;

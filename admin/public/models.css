@@ -100,7 +100,7 @@
   background: var(--surface);
   color: var(--muted);
 }
-.model-default-row strong { min-width: 0; overflow-wrap: anywhere; color: var(--ink); }
+.model-default-row strong { min-width: 0; overflow-wrap: anywhere; color: var(--ink); font-size: 16px; }
 .model-default-row small { color: var(--muted); }
 .model-toolbar { gap: 10px; margin-bottom: 14px; }
 .model-toolbar-actions { align-items: center; }

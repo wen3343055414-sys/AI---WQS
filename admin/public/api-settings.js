@@ -98,7 +98,7 @@ export function initApiSettings({ api, toast, escape: e, icon, date, number }) {
           ).join('')}</select></label>
         </div>
         <label>接口地址<input name="baseUrl" type="url" value="${e(d.baseUrl)}" required maxlength="1000" placeholder="https://api.example.com/v1" autocomplete="off" spellcheck="false"></label>
-        <label>API 密钥
+        <label id="provider-key-row" ${d.authMode === 'none' ? 'hidden' : ''}>API 密钥
           <input id="provider-api-key" type="password" name="apiKey" maxlength="4096" placeholder="${p?.hasApiKey ? '留空保留现有密钥' : ''}" autocomplete="new-password">
         </label>
         <details class="provider-advanced">
@@ -211,7 +211,11 @@ export function initApiSettings({ api, toast, escape: e, icon, date, number }) {
     if (t.id === 'provider-region') { region = t.value; providerList(); }
     if (t.id === 'model-provider-filter') { modelProvider = t.value; modelTable(); }
     if (t.name === 'authMode' || t.name === 'clearKey') {
-      const key = $('provider-api-key'); key.disabled = draft.authMode === 'none' || draft.clearKey; if (key.disabled) { key.value = ''; delete draft.apiKey; }
+      const key = $('provider-api-key');
+      $('provider-key-row').hidden = draft.authMode === 'none';
+      key.disabled = draft.authMode === 'none' || draft.clearKey;
+      if (key.disabled) { key.value = ''; delete draft.apiKey; }
+      controls();
     }
   });
   async function selectTab(button) {

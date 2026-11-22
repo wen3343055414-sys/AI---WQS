@@ -128,7 +128,7 @@ try {
   assert.ok(await page.locator('#audit-table tr').count() > 0);
   await navigate('api-settings');
   await page.locator('#provider-config-form').waitFor();
-  assert.equal(await page.locator('#provider-api-key').isDisabled(), true);
+  assert.equal(await page.locator('#provider-api-key').isVisible(), false);
   const providerTab = page.getByRole('tab', { name: '服务商', exact: true });
   await providerTab.focus();
   await page.keyboard.press('ArrowRight');
@@ -149,10 +149,13 @@ try {
   await page.getByRole('dialog', { name: '添加域名' }).waitFor();
   await page.locator('#domain-hostname').fill('workbench.example.test');
   await page.locator('#domain-add-submit').click();
+  await page.locator('#domain-add-error').filter({ hasText: '保留域名' }).waitFor();
+  await page.locator('#domain-hostname').fill('ui-review.wqs-fixture.net');
+  await page.locator('#domain-add-submit').click();
   await page.getByRole('dialog', { name: '添加域名' }).waitFor({ state: 'hidden' });
-  const domain = page.locator('.dm-table tr').filter({ hasText: 'workbench.example.test' });
+  const domain = page.locator('.dm-table tr').filter({ hasText: 'ui-review.wqs-fixture.net' });
   await domain.getByRole('button', { name: '详情' }).click();
-  await page.getByRole('dialog', { name: 'workbench.example.test' }).waitFor();
+  await page.getByRole('dialog', { name: 'ui-review.wqs-fixture.net' }).waitFor();
   await page.keyboard.press('Escape');
   await page.getByRole('tab', { name: '局域网', exact: true }).click();
   await page.getByRole('button', { name: '停用局域网访问', exact: true }).waitFor();

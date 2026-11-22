@@ -78,6 +78,8 @@ main { max-width: 1440px; padding: 27px clamp(16px, 3.2vw, 38px) 44px; }
 .metric-value { font-size: clamp(18px, 2.1vw, 29px); font-variant-numeric: tabular-nums; }
 .metric-value small { color: var(--muted); }
 .mini-chart { margin-top: 1px; }
+#chart-area { stroke: none; }
+.chart-labels, .chart-footer { color: var(--muted); }
 .memory-meter { margin-top: 8px; }
 .overview-columns { gap: 16px; }
 .overview-main, .overview-aside { gap: 16px; }
