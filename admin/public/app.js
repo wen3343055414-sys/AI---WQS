@@ -142,7 +142,6 @@ function navigate(page) {
   if (!Object.hasOwn(pages, page)) return;
   if (currentPage === 'websites' && page !== currentPage && !websiteUI.canLeave()) return false;
   currentPage = page;
-  $('app-view').classList.toggle('domains-mode', page === 'websites');
   document.querySelectorAll('.page-panel').forEach(node => { node.hidden = node.id !== `page-${page}`; });
   document.querySelectorAll('.nav-item').forEach(node => { const selected = node.dataset.page === page; node.classList.toggle('active', selected); node.setAttribute('aria-current', selected ? 'page' : 'false'); });
   const title = pages[page];
@@ -274,7 +273,7 @@ function renderModelUsage(usage) {
   $('token-total-requests').textContent = usage.since ? `${number(total.requests)} 次请求` : '';
   $('token-input-output').textContent = `${number(total.promptTokens)} / ${number(total.completionTokens)}`;
   $('token-cached').textContent = total.cachedTokens ? `缓存命中 ${number(total.cachedTokens)}` : '';
-  $('token-results').textContent = `${number(total.succeeded)} 成功 / ${number(total.failed)} 失败`;
+  $('token-results').textContent = `${number(total.succeeded)} / ${number(total.failed)}`;
   const unknown = total.requests - total.meteredRequests;
   $('token-missing').textContent = [total.pending ? `${number(total.pending)} 次进行中` : '', unknown > 0 ? `${number(unknown)} 次用量未知` : ''].filter(Boolean).join(' · ');
   $('token-recent').innerHTML = usage.recent.length ? usage.recent.map(item => `<tr><td>${date(item.time, true)}${item.error ? `<small title="${escape(item.error)}">${escape(item.error)}</small>` : ''}</td><td class="mono">${escape(item.model)}</td><td><span class="badge ${item.status === 'success' ? 'success' : item.status === 'failed' ? 'failed' : 'neutral'}">${({ success: '已回复', failed: '失败', pending: '进行中', unknown: '结果未确认' })[item.status]}</span></td><td>${item.promptTokens === null ? '—' : number(item.promptTokens)}</td><td>${item.completionTokens === null ? '—' : number(item.completionTokens)}</td><td>${item.totalTokens === null ? '—' : number(item.totalTokens)}</td><td>${item.latencyMs === null ? '—' : `${(item.latencyMs / 1000).toFixed(1)} s`}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">暂无请求</td></tr>';

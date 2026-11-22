@@ -58,7 +58,7 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
       <div class="dm-access-title"><h2>工作台访问</h2>${pill(state.label, state.tone)}</div>
       <div class="dm-access-url">${primary ? (ready() ? link(primary, primary, 'dm-primary-url') : `<span class="dm-address">${e(primary)}</span>`)
         : '<span class="dm-muted">暂无局域网地址</span>'}
-        ${primary ? '<button class="dm-icon-button" data-domain-action="copy-primary" aria-label="复制局域网网址" title="复制局域网网址">⧉</button>' : ''}
+        ${primary ? `<button class="dm-icon-button" data-domain-action="copy-primary" aria-label="复制局域网网址" title="复制局域网网址">${icon('copy')}</button>` : ''}
       </div>
     </div>
     <button class="dm-button" data-domain-action="access-check">${icon('refresh')}刷新检测</button>`;
@@ -115,7 +115,7 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
   }
   function domainPanel() {
     return `<div class="dm-toolbar">
-      <label class="dm-search">${icon('globe')}<input id="domain-search" type="search" aria-label="搜索域名或 IP" placeholder="搜索域名或 IP" value="${e(query)}"></label>
+      <label class="dm-search">${icon('search')}<input id="domain-search" type="search" aria-label="搜索域名或 IP" placeholder="搜索域名或 IP" value="${e(query)}"></label>
       <button class="dm-button primary" data-domain-action="add">＋ 添加域名</button>
     </div>
     <div class="dm-table-wrap" tabindex="0" role="region" aria-label="访问地址列表">

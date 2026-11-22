@@ -90,11 +90,16 @@ try {
   assert.equal(await page.locator('#page-overview .panel-disclosure[open]').count(), 0);
   await page.screenshot({ path: path.join(output, 'admin-overview-desktop.png'), fullPage: true });
 
+  const sidebar = page.locator('#admin-sidebar');
+  const sidebarColor = () => sidebar.evaluate(element => getComputedStyle(element).backgroundColor);
+  const overviewSidebarColor = await sidebarColor();
   const navigate = async id => {
     const toggle = page.locator('#admin-menu');
-    if (await toggle.isVisible()) await toggle.click();
+    const mobile = await toggle.isVisible();
+    if (mobile) await toggle.click();
     await page.locator(`#admin-sidebar .nav-item[data-page="${id}"]`).click();
     await page.locator('#page-' + id).waitFor();
+    if (mobile) await sidebar.waitFor({ state: 'hidden' });
   };
   await navigate('services');
   assert.equal(await page.locator('#detailed-services .service-row').count(), 2);
@@ -140,6 +145,7 @@ try {
   await page.screenshot({ path: path.join(output, 'admin-models-desktop.png'), fullPage: true });
 
   await navigate('websites');
+  assert.equal(await sidebarColor(), overviewSidebarColor);
   const search = page.getByRole('searchbox', { name: '搜索域名或 IP' });
   await search.fill('no-match');
   await page.getByText('没有匹配的地址', { exact: true }).waitFor();
@@ -178,6 +184,7 @@ try {
       assert.ok(await page.locator('body').evaluate(body => body.scrollWidth <= innerWidth), 'Admin ' + id + ' must fit ' + width + 'px');
     }
     if (width === 320) {
+      await page.screenshot({ path: path.join(output, 'admin-access-mobile-320.png'), fullPage: true });
       await navigate('overview');
       await page.screenshot({ path: path.join(output, 'admin-overview-mobile-320.png'), fullPage: true });
     }

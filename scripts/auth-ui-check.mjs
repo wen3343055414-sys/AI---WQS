@@ -254,7 +254,7 @@ try {
   assert.equal(await historyLinks.count(), 2);
   await page.screenshot({ path: path.join(output, "navigation-history-desktop.png") });
   await page.locator('#history-results a[href="#chat/' + olderSessionId + '"]').click();
-  await page.getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
+  await page.locator("#messages").getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
   assert.equal(await page.locator("#messages .message").count(), 4);
   await page.locator('#sidebar a[href="#tasks"]').click();
   const readyDownload = page.waitForEvent("download");

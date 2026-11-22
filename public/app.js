@@ -369,7 +369,7 @@ function conversationList(sessions, filtered = false) {
     const preview = Array.from(content.replace(/\s+/g, " ")).slice(0, 120).join("");
     return `<li><a class="conversation-link" href="#chat/${e(session.id)}" aria-label="继续对话：${e(session.title)}">
       <span class="conversation-symbol">${icon("chat")}</span>
-      <span class="conversation-copy"><strong>${e(session.title)}</strong>${preview ? `<span>${e(preview)}</span>` : ""}</span>
+      <span class="conversation-copy"><strong>${e(session.title)}</strong>${preview && preview !== session.title ? `<span>${e(preview)}</span>` : ""}</span>
       <span class="conversation-meta"><time datetime="${e(session.updatedAt)}">${dateText(session.updatedAt, true)}</time></span>
       <span class="conversation-chevron">${icon("chevron")}</span>
     </a></li>`;
