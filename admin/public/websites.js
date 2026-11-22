@@ -2,7 +2,7 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
   const root = document.getElementById('website-management');
   const $ = id => root.querySelector(`#${id}`);
   const post = (url, value) => api(url, { method: 'POST', body: JSON.stringify(value) });
-  let data = null, tab = 'domains', query = '', busy = false, loading = false, epoch = 0, detailId = '';
+  let data = null, tab = 'domains', query = '', busy = false, loading = false, epoch = 0, detailId = '', renderedPanel = '';
   const access = () => data?.access || {};
   const domains = () => data?.domains || [];
   const addresses = () => Array.isArray(access().addresses) ? access().addresses : [];
@@ -165,7 +165,14 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
     const panel = $('domain-content');
     panel.setAttribute('aria-labelledby', `domain-tab-${tab}`);
     if (!preserveFocus || !panel.contains(document.activeElement)) {
-      panel.innerHTML = tab === 'deployment' ? deploymentPanel() : tab === 'ssl' ? sslPanel() : domainPanel();
+      const content = tab === 'deployment' ? deploymentPanel() : tab === 'ssl' ? sslPanel() : domainPanel();
+      if (content !== renderedPanel) {
+        const scroll = preserveFocus ? panel.querySelector('.dm-table-wrap')?.scrollLeft : 0;
+        panel.innerHTML = content;
+        const table = panel.querySelector('.dm-table-wrap');
+        if (table && scroll) table.scrollLeft = scroll;
+        renderedPanel = content;
+      }
     }
     if ($('domain-detail-dialog').open && detailId && !preserveFocus) renderDetails();
     updateBusy();
@@ -257,6 +264,7 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
     if (event.target.id !== 'domain-search') return;
     query = event.target.value;
     $('domain-rows').innerHTML = domainRows();
+    renderedPanel = domainPanel();
     updateBusy();
   });
   root.addEventListener('click', async event => {

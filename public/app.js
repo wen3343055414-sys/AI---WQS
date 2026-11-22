@@ -795,7 +795,7 @@ function chatPage() {
       "",
     )}${!state.sessions.length ? '<p class="empty-history">暂无会话</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新对话"}</h1><div>${session ? rowActions("会话操作",
     button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
-    button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div></div><div class="messages" id="messages">${
+    button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div></div><div class="messages" id="messages" data-session-id="${e(session?.id || "")}">${
     session
       ? session.messages
           .map(
@@ -882,6 +882,9 @@ function serverSettings() {
 }
 function render() {
   const showCalls = app.querySelector(".plugin-recent")?.open;
+  const previousMessages = app.querySelector("#messages");
+  const previousTop = previousMessages?.scrollTop;
+  const wasReading = previousMessages && previousMessages.scrollHeight - previousMessages.clientHeight - previousTop > 24;
   const textarea = document.querySelector("#message-input");
   if (textarea) drafts.set(textarea.form.dataset.draft, textarea.value);
   const { page } = route();
@@ -901,7 +904,10 @@ function render() {
   if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
   const messages = document.querySelector("#messages");
-  if (messages) messages.scrollTop = messages.scrollHeight;
+  if (messages) {
+    const sameConversation = messages.dataset.sessionId === previousMessages?.dataset.sessionId;
+    messages.scrollTop = sameConversation && wasReading ? previousTop : messages.scrollHeight;
+  }
   if (focusNewConversation && page === "chat" && !route().id) {
     focusNewConversation = false;
     requestAnimationFrame(() => {

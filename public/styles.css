@@ -1101,7 +1101,7 @@ td {
   flex: 1;
   overflow-y: auto;
   padding: 24px;
-  scroll-behavior: smooth;
+  scroll-behavior: auto;
 }
 .chat-welcome {
   text-align: center;
@@ -2292,6 +2292,9 @@ body.sidebar-collapsed .toast { left: 50%; }
 .prompt-card-bottom .btn { padding-inline: 10px; }
 .chat-sidebar { background: var(--soft); }
 .chat-sidebar > .btn { margin-bottom: 11px; }
+@media (min-width: 761px) {
+  body:not(.sidebar-collapsed) .chat-sidebar > .btn { display: none; }
+}
 .chat-header { position: relative; z-index: 2; }
 .chat-welcome { margin: auto; padding: 18px 0; }
 .chat-welcome .brand-mark { margin: 0 auto; }
