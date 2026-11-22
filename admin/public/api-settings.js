@@ -274,6 +274,10 @@ export function initApiSettings({ api, toast, escape: e, icon, date, number }) {
       if (await confirm('移除此模型？', `将移除“${m.name}”的模型配置，历史对话和用量保留。默认模型被移除后，需要重新设置。`, '移除模型')) await perform(() => post(`/api/model-catalog/${id}/delete`, { revision: m.revision, confirmation: id }));
     }
   });
+  root.addEventListener('invalid', event => {
+    const section = event.target.closest('#provider-config-form details');
+    if (section) section.open = true;
+  }, true);
   root.addEventListener('submit', async event => {
     event.preventDefault(); if (busy) return;
     if (event.target.id === 'provider-config-form') {

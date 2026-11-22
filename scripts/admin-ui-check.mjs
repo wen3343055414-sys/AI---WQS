@@ -142,6 +142,18 @@ try {
   await page.getByRole('tabpanel', { name: '用量与限额' }).waitFor();
   await page.keyboard.press('Home');
   await page.getByRole('tabpanel', { name: '服务商' }).waitFor();
+  const advanced = page.locator('#provider-config-form details').filter({ hasText: '高级设置' });
+  await advanced.locator('summary').click();
+  const timeout = advanced.locator('[name="timeoutSeconds"]');
+  const savedTimeout = await timeout.inputValue();
+  await timeout.fill('1');
+  await advanced.locator('summary').click();
+  await page.locator('#provider-save').click();
+  await timeout.waitFor({ state: 'visible' });
+  assert.equal(await timeout.evaluate(element => element.validity.rangeUnderflow), true);
+  await timeout.fill(savedTimeout);
+  await page.locator('#provider-save').click();
+  await page.getByText('连接已保存。', { exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, 'admin-models-desktop.png'), fullPage: true });
 
   await navigate('websites');
@@ -184,6 +196,15 @@ try {
       assert.ok(await page.locator('body').evaluate(body => body.scrollWidth <= innerWidth), 'Admin ' + id + ' must fit ' + width + 'px');
     }
     if (width === 320) {
+      const details = domain.getByRole('button', { name: '详情', exact: true });
+      await details.waitFor();
+      assert.ok(await details.evaluate(element => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.left >= 0 && bounds.right <= innerWidth;
+      }), 'The domain row actions must fit on a 320px viewport');
+      await details.click();
+      await page.getByRole('dialog', { name: 'ui-review.wqs-fixture.net' }).waitFor();
+      await page.keyboard.press('Escape');
       await page.screenshot({ path: path.join(output, 'admin-access-mobile-320.png'), fullPage: true });
       await navigate('overview');
       await page.screenshot({ path: path.join(output, 'admin-overview-mobile-320.png'), fullPage: true });

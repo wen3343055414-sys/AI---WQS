@@ -227,8 +227,28 @@
 
 @media (max-width: 520px) {
   .dm-access-card, .dm-deployment-card, .dm-dialog { padding: 13px; }
-  .dm-access-card .dm-button { margin-left: auto; }
+  .dm-access-refresh { width: 36px; padding: 0; }
+  .dm-access-refresh span { display: none; }
   .dm-tabs { width: 100%; }
   .dm-tabs button { flex: 1; padding-inline: 6px; }
   .dm-table th, .dm-table td { padding-inline: 10px; }
+  .dm-address-table, .dm-address-table tbody { display: block; width: 100%; min-width: 0; }
+  .dm-address-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    clip-path: inset(50%);
+    overflow: hidden;
+    white-space: nowrap;
+  }
+  .dm-address-table tbody > tr {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px;
+    padding: 12px;
+  }
+  .dm-address-table td { display: block; min-width: 0; padding: 0; }
+  .dm-address-table td:first-child, .dm-address-table td:last-child { flex-basis: 100%; }
+  .dm-address-table .dm-row-actions button, .dm-address-table .dm-row-actions a { min-height: 38px; }
 }

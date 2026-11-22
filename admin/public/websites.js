@@ -61,7 +61,7 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
         ${primary ? `<button class="dm-icon-button" data-domain-action="copy-primary" aria-label="复制局域网网址" title="复制局域网网址">${icon('copy')}</button>` : ''}
       </div>
     </div>
-    <button class="dm-button" data-domain-action="access-check">${icon('refresh')}刷新检测</button>`;
+    <button class="dm-button dm-access-refresh" data-domain-action="access-check" aria-label="刷新检测" title="刷新检测">${icon('refresh')}<span>刷新检测</span></button>`;
     const card = $('domain-access-summary');
     if (!preserveFocus || !card.contains(document.activeElement)) card.innerHTML = content;
   }
@@ -78,13 +78,13 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
     return addresses().filter(item => `${item.address} ${item.name} ${item.url}`.toLocaleLowerCase().includes(search)).map(item => {
       const url = safeUrl(item.url);
       const label = url ? new URL(url).host : item.address;
-      return `<tr>
-        <td><div class="dm-domain-cell"><span class="dm-row-icon">${icon('server')}</span>
+      return `<tr role="row">
+        <td role="cell"><div class="dm-domain-cell"><span class="dm-row-icon">${icon('server')}</span>
           <div><strong class="dm-mono">${e(label)}</strong>${item.name ? `<small>${e(item.name)}</small>` : ''}</div>
         </div></td>
-        <td>${pill(state.label, state.tone)}</td>
-        <td>HTTP</td>
-        <td><div class="dm-row-actions">
+        <td role="cell">${pill(state.label, state.tone)}</td>
+        <td role="cell">HTTP</td>
+        <td role="cell"><div class="dm-row-actions">
           ${url && ready() ? link(url, '打开 ↗') : ''}
           ${url ? `<button data-domain-action="copy-lan" data-address="${e(item.address)}">复制</button>` : ''}
           <button data-domain-action="lan-detail" data-address="${e(item.address)}">详情</button>
@@ -96,13 +96,13 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
     const search = query.trim().toLocaleLowerCase();
     return domains().filter(item => item.hostname.toLocaleLowerCase().includes(search)).map(item => {
       const ssl = certificate(item);
-      return `<tr>
-        <td><div class="dm-domain-cell"><span class="dm-row-icon">${icon('globe')}</span>
+      return `<tr role="row">
+        <td role="cell"><div class="dm-domain-cell"><span class="dm-row-icon">${icon('globe')}</span>
           <div><strong>${e(item.hostname)}</strong>${item.isDefault ? '<small>默认域名</small>' : ''}</div>
         </div></td>
-        <td>${domainStatus(item)}</td>
-        <td>${pill(ssl.label, ssl.tone)}</td>
-        <td><div class="dm-row-actions">
+        <td role="cell">${domainStatus(item)}</td>
+        <td role="cell">${pill(ssl.label, ssl.tone)}</td>
+        <td role="cell"><div class="dm-row-actions">
           <button data-domain-action="verify" data-id="${e(item.id)}">检测</button>
           <button data-domain-action="detail" data-id="${e(item.id)}">详情</button>
         </div></td>
@@ -111,7 +111,7 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
   }
   function domainRows() {
     return lanRows() + customRows() ||
-      `<tr><td colspan="4"><div class="dm-empty">${icon('globe')}<h3>${query.trim() ? '没有匹配的地址' : '暂无访问地址'}</h3></div></td></tr>`;
+      `<tr role="row"><td role="cell" colspan="4"><div class="dm-empty">${icon('globe')}<h3>${query.trim() ? '没有匹配的地址' : '暂无访问地址'}</h3></div></td></tr>`;
   }
   function domainPanel() {
     return `<div class="dm-toolbar">
@@ -119,8 +119,8 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
       <button class="dm-button primary" data-domain-action="add">＋ 添加域名</button>
     </div>
     <div class="dm-table-wrap" tabindex="0" role="region" aria-label="访问地址列表">
-      <table class="dm-table"><thead><tr><th>访问地址</th><th>状态</th><th>证书</th><th>操作</th></tr></thead>
-      <tbody id="domain-rows">${domainRows()}</tbody></table>
+      <table class="dm-table dm-address-table" role="table"><thead role="rowgroup"><tr role="row"><th role="columnheader" scope="col">访问地址</th><th role="columnheader" scope="col">状态</th><th role="columnheader" scope="col">证书</th><th role="columnheader" scope="col">操作</th></tr></thead>
+      <tbody id="domain-rows" role="rowgroup">${domainRows()}</tbody></table>
     </div>`;
   }
   function deploymentPanel() {
