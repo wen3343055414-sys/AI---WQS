@@ -111,7 +111,7 @@ try {
   const beforeApproval = mcp.state.calls.length;
   await page.getByRole('button', { name: '确认并执行', exact: true }).click();
   await page.locator('.plugin-approval').waitFor({ state: 'hidden' });
-  await page.getByText('已读取插件返回结果：', { exact: false }).waitFor();
+  await page.locator('#messages').getByText('已读取插件返回结果：', { exact: false }).waitFor();
   assert.equal(mcp.state.calls.length, beforeApproval + 1);
   assert.equal(mcp.state.calls.at(-1).name, 'create_issue');
   assert.equal(mcp.state.calls.at(-1).arguments.title, '协作任务');
