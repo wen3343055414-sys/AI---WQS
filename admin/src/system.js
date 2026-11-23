@@ -98,6 +98,12 @@ export class SystemManager {
       host: { platform: 'Windows', cpuCount: os.cpus().length, memoryTotal: os.totalmem(), memoryUsed: os.totalmem() - os.freemem(), uptimeSeconds: os.uptime() },
       docker: { available: false }, containers: [], stats: [], backups: { files: [] }, scheduler: {}, maintenance,
     };
+    try {
+      const network = await jsonFile(path.join(this.deploymentRoot, 'github-network.json'), {});
+      const retryAt = network.repository === config.repository && network.branch === config.branch && Number.isFinite(network.retryAt) ? network.retryAt : 0;
+      result.updateCheck = retryAt > Date.now() / 1000 && retryAt < 8.64e12
+        ? { state: 'deferred', retryAt: new Date(retryAt * 1000).toISOString() } : { state: 'ready' };
+    } catch { result.updateCheck = { state: 'unknown' }; }
     const scheduler = this.taskStatus().then(value => { result.scheduler = value; }).catch(error => { result.scheduler = { error: error.message }; });
     try {
       result.containers = await this.containers();
@@ -139,7 +145,7 @@ export class SystemManager {
       const result = await this.run(config.python, [path.join(this.codeRoot, 'scripts/control.py'), action, this.deploymentRoot, this.root, this.settings.schtasks], 18 * 60 * 1000, 8 * 1024 * 1024);
       const response = JSON.parse(result.stdout.trim());
       if (!response.ok) throw new Error(response.message);
-      return { message: response.message, output: redact(result.stderr || '') };
+      return { status: response.status === 'deferred' ? 'deferred' : 'success', message: response.message, output: redact(result.stderr || '') };
     } catch (error) {
       let response;
       try { response = JSON.parse(error.stdout || '{}'); } catch { /* Non-JSON failures retain the original message. */ }

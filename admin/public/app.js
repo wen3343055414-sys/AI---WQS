@@ -176,8 +176,8 @@ function renderServices(containers, detailed = false) {
 function renderJobs(jobs) {
   if (!jobs.length) return '<div class="empty">暂无管理任务</div>';
   return jobs.slice(0, 5).map(job => {
-    const status = { success: '已完成', running: '执行中', failed: '未完成', interrupted: '已中断' }[job.status] || job.status;
-    const tone = job.status === 'success' ? 'success' : job.status === 'failed' ? 'failed' : 'neutral';
+    const status = { success: '已完成', running: '执行中', failed: '未完成', interrupted: '已中断', deferred: '已暂缓' }[job.status] || job.status;
+    const tone = job.status === 'success' ? 'success' : job.status === 'failed' ? 'failed' : job.status === 'deferred' ? 'warning' : 'neutral';
     return `<button type="button" class="activity-item" data-job="${escape(job.id)}">
       <span class="activity-text"><strong>${escape(actions[job.action]?.[0] || job.action)}</strong><small>${escape(job.message)}</small></span>
       <time class="activity-time" datetime="${escape(job.created)}">${date(job.created, true)}</time>
@@ -216,8 +216,12 @@ function render() {
   $('metric-backup-detail').textContent = files[0] ? relative(files[0].modifiedAt) : r.backups.error ? '暂时无法读取备份' : '尚未创建备份';
   $('overview-services').innerHTML = renderServices(containers); $('detailed-services').innerHTML = renderServices(containers, true);
   badge($('services-badge'), $('metric-status').textContent, healthy ? 'success' : running ? 'warning' : 'neutral');
-  const schedulerText = r.scheduler.error ? '无法读取' : r.scheduler.enabled ? '已启用' : '已暂停';
-  for (const id of ['auto-update-badge', 'deploy-scheduler-badge']) badge($(id), schedulerText, r.scheduler.enabled ? 'success' : 'neutral');
+  const limited = r.scheduler.enabled && r.updateCheck?.state === 'deferred';
+  const schedulerText = r.scheduler.error ? '无法读取' : limited ? '等待 GitHub' : r.scheduler.enabled ? '已启用' : '已暂停';
+  for (const id of ['auto-update-badge', 'deploy-scheduler-badge']) badge($(id), schedulerText, limited ? 'warning' : r.scheduler.enabled ? 'success' : 'neutral');
+  const checkStatus = $('update-check-status');
+  checkStatus.hidden = !limited && r.updateCheck?.state !== 'unknown';
+  checkStatus.textContent = limited ? `GitHub 接口限流，预计 ${date(r.updateCheck.retryAt)} 后重试。等待期间保留当前运行版本。` : r.updateCheck?.state === 'unknown' ? '暂时无法读取更新检查状态，请查看更新日志。' : '';
   const schedulerAction = $('scheduler-action');
   schedulerAction.dataset.action = r.scheduler.enabled ? 'pause' : 'resume';
   schedulerAction.textContent = r.scheduler.enabled ? '暂停自动更新' : '恢复自动更新';
@@ -247,7 +251,7 @@ function render() {
     const target = $(id);
     if (target.innerHTML !== jobsMarkup && !target.contains(document.activeElement)) target.innerHTML = jobsMarkup;
   }
-  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录', api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型', api_provider_delete: '删除模型连接', api_model_delete: '移除模型' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
+  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录', api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型', api_provider_delete: '删除模型连接', api_model_delete: '移除模型' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : entry.result === 'deferred' ? 'warning' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断', deferred: '已暂缓' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
   const busy = actionPending || r.jobs.some(job => job.status === 'running');
   document.querySelectorAll('[data-action]').forEach(button => {
     const action = button.dataset.action;

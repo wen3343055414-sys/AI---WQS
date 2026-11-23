@@ -213,6 +213,7 @@ class Deployment:
             return
         if current.get('verification') == 'pending-admin':
             self.complete_activation(current)
+        self.refresh_bootstrap(current)
         try:
             self.health(current["sha"])
         except Exception:
@@ -222,6 +223,25 @@ class Deployment:
             self.backup(current["sha"])
             current["lastBackup"] = now()
             write_json(self.current_path, current)
+
+    def refresh_bootstrap(self, current):
+        # Upgrade the installed entry only from the verified running release.
+        # The next process then uses that release's transport as well as its core.
+        if current.get('verification') != 'verified' or not self.native_release(current['sha']):
+            return
+        source = self.release(current['sha']) / 'ops/windows/updater-bootstrap.py'
+        target = self.root / 'update-windows.py'
+        if not source.is_file() or not target.is_file() or source.read_bytes() == target.read_bytes():
+            return
+        content = source.read_bytes()
+        with tempfile.NamedTemporaryFile(dir=self.root, delete=False) as stream:
+            stream.write(content)
+            temporary = Path(stream.name)
+        try:
+            os.replace(temporary, target)
+        finally:
+            temporary.unlink(missing_ok=True)
+        print('Updater entry refreshed from verified release:', current['sha'], flush=True)
 
     def prepare_release(self, sha):
         target = self.release(sha)
@@ -274,10 +294,10 @@ class Deployment:
         self.release(sha)
         if read_json(self.failed_path, {}).get("sha") == sha:
             print("Release previously failed or was rolled back; waiting for a new commit.")
-            return
+            return {'status': 'blocked', 'candidateSha': sha, 'currentSha': current.get('sha')}
         if current.get("sha") == sha:
             print("Already current:", sha)
-            return
+            return {'status': 'current', 'currentSha': sha}
         if current.get("sha"):
             comparison = self.github(f"compare/{current['sha']}...{sha}")
             if comparison.get("status") != "ahead":
@@ -285,7 +305,7 @@ class Deployment:
         checks = self.github(f"actions/runs?head_sha={sha}&event=push&per_page=30")
         if not checks_passed(checks, sha):
             print("Waiting for successful push CI:", sha)
-            return
+            return {'status': 'waiting-ci', 'candidateSha': sha, 'currentSha': current.get('sha')}
         self.prepare_release(sha)
         self.compose(sha, ["config", "--quiet"])
         self.compose(sha, ["build"])
@@ -303,6 +323,7 @@ class Deployment:
         candidate = self.activate(sha, current)
         self.failed_path.unlink(missing_ok=True)
         print('Deployed:' if candidate['verification'] == 'verified' else 'Containers ready; admin verification queued:', sha, flush=True)
+        return {'status': 'updated', 'currentSha': sha}
 
     def rollback(self):
         current = read_json(self.current_path, {})

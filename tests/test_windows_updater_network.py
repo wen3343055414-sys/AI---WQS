@@ -62,7 +62,7 @@ class UpdaterNetworkTests(unittest.TestCase):
         self.service.maintain = Mock()
         with patch.object(bootstrap.subprocess, 'run', return_value=
                           subprocess.CompletedProcess([], 0, A + '\trefs/heads/main\n', '')) as run:
-            self.service.update()
+            self.assertEqual(self.service.update(), {'status': 'current', 'currentSha': A})
         self.assertEqual(run.call_count, 1)
         self.assertIn('ls-remote', run.call_args.args[0])
         self.assertFalse((self.root / 'github-network.json').exists())
@@ -80,12 +80,25 @@ class UpdaterNetworkTests(unittest.TestCase):
         for error in (FileNotFoundError('Git was moved'), subprocess.TimeoutExpired('git', 60)):
             with self.subTest(error=error):
                 service = self.module.Deployment(self.root)
-                service.save_network(service.network_state() | {'retryAt': 5000})
+                respond = self.curl_response()
+                def command(arguments, **kwargs):
+                    if 'ls-remote' in arguments:
+                        raise error
+                    return respond(arguments, **kwargs)
                 with patch.object(bootstrap.time, 'time', return_value=1000), \
-                        patch.object(bootstrap.subprocess, 'run', side_effect=error) as run:
-                    with self.assertRaises(bootstrap.UpdateDeferred):
-                        service.github('git/ref/heads/main')
-                self.assertEqual(run.call_count, 1)
+                        patch.object(bootstrap.subprocess, 'run', side_effect=command) as run:
+                    self.assertEqual(service.github('git/ref/heads/main')['object']['sha'], B)
+                self.assertEqual(run.call_count, 2)
+                (self.root / 'github-network.json').unlink()
+
+    def test_hard_cooldown_skips_git_and_rest_before_taking_time_from_management(self):
+        self.service.save_network(self.service.network_state() | {'retryAt': 5000})
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run') as run:
+            with self.assertRaises(bootstrap.UpdateDeferred) as deferred:
+                self.service.github('git/ref/heads/main')
+        self.assertEqual(deferred.exception.retry_at, 5000)
+        run.assert_not_called()
 
     def test_rate_limit_stops_immediately_and_persists_until_reset(self):
         self.service.config.pop('git')
@@ -135,13 +148,12 @@ class UpdaterNetworkTests(unittest.TestCase):
         self.assertEqual(run.call_count, 2)
 
     def test_deferred_update_still_maintains_the_running_release(self):
-        self.service.config.pop('git')
         self.service.docker = Mock()
         self.service.maintain = Mock()
         self.service.save_network(self.service.network_state() | {'retryAt': 5000})
         with patch.object(bootstrap.time, 'time', return_value=1000), \
                 patch.object(bootstrap.subprocess, 'run') as run:
-            self.assertIsNone(self.service.update())
+            self.assertEqual(self.service.update(), {'status': 'deferred', 'retryAt': 5000})
         self.service.maintain.assert_called_once()
         run.assert_not_called()
         self.assertEqual(self.module.read_json(self.root / 'current.json')['sha'], A)
@@ -179,6 +191,30 @@ class UpdaterNetworkTests(unittest.TestCase):
         self.module.write_json(self.root / 'current.json', {'sha': '../../outside'})
         with self.assertRaisesRegex(RuntimeError, 'Invalid deployed'):
             bootstrap.load_implementation(self.root)
+
+    def test_loader_follows_the_accepted_transports_updates(self):
+        for sha, version in ((A, 'first'), (B, 'second')):
+            release = self.root / 'releases' / sha / 'ops/windows'
+            release.mkdir(parents=True)
+            shutil.copy2(WINDOWS / 'update-windows.py', release / 'update-windows.py')
+            (release / 'release.json').write_text('{}', encoding='utf-8')
+            transport = release / 'updater-bootstrap.py'
+            transport.write_text('def install_transport(module):\n    module.transport_version = '
+                                 + repr(version) + '\n    return module\n', encoding='utf-8')
+            before = transport.read_bytes()
+            self.module.write_json(self.root / 'current.json', {'sha': sha})
+            loaded = bootstrap.load_implementation(self.root)
+            self.assertEqual(loaded.transport_version, version)
+            self.assertEqual(transport.read_bytes(), before)
+
+    def test_partial_release_never_loads_transport_without_the_native_marker(self):
+        release = self.root / 'releases' / A / 'ops/windows'
+        release.mkdir(parents=True)
+        shutil.copy2(WINDOWS / 'update-windows.py', release / 'update-windows.py')
+        shutil.copy2(WINDOWS / 'update-windows.py', self.root / 'legacy-updater.py')
+        (release / 'updater-bootstrap.py').write_text('raise AssertionError("Unaccepted transport")', encoding='utf-8')
+        loaded = bootstrap.load_implementation(self.root)
+        self.assertEqual(Path(loaded.__file__), self.root / 'legacy-updater.py')
 
 
 if __name__ == '__main__':
