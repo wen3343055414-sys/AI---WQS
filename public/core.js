@@ -1,5 +1,12 @@
 export const STORAGE_KEY = "zhizuotai.workspace.v1";
 export const CATEGORIES = ["写作", "营销", "编程", "办公", "学习"];
+export const INTEL_TOPICS = {
+  technology: "AI 与技术",
+  policy: "政策与采购",
+  markets: "经济与市场",
+  research: "研究与产品",
+  world: "全球要闻",
+};
 export const MODELS = {
   general: "通用助手",
   writing: "写作助手",

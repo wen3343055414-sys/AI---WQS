@@ -15,6 +15,7 @@ try {
   assert.equal(status.mode, "server");
   assert.equal(typeof status.serverId, "string");
   assert.equal((await get("/api/workspace")).status, 401);
+  assert.equal((await get("/api/intelligence")).status, 401);
 
   const home = await get("/");
   assert.equal(home.status, 200);
@@ -27,6 +28,8 @@ try {
     ["/sync.js", "javascript"],
     ["/auth.js", "javascript"],
     ["/auth.css", "text/css"],
+    ["/intel.js", "javascript"],
+    ["/intel.css", "text/css"],
     ["/styles.css", "text/css"],
     ["/favicon.svg", "image/svg+xml"],
   ]) {

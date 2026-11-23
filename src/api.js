@@ -1,6 +1,7 @@
 import { HttpError } from "./store.js";
 import { PluginService } from "./plugins.js";
 import { PluginAgent } from "./plugin-agent.js";
+import { Intelligence } from "./intelligence.js";
 
 const cookieToken = (request) => request.headers.cookie?.match(/(?:^|;\s*)wqs_session=([a-f0-9]{64})(?:;|$)/)?.[1] || "";
 const limit = 16 * 1024 * 1024;
@@ -11,7 +12,7 @@ function readJson(request, maximum = limit) {
     const chunks = [];
     request.on("data", chunk => {
       size += chunk.length;
-      if (size > maximum) { if (!rejected) reject(new HttpError(413, "body_too_large", maximum === limit ? "工作空间超过 16 MB，请先导出并减少资料。" : "插件请求内容过大。")); rejected = true; return; }
+      if (size > maximum) { if (!rejected) reject(new HttpError(413, "body_too_large", maximum === limit ? "工作空间超过 16 MB，请先导出并减少资料。" : "请求内容过大。")); rejected = true; return; }
       if (!rejected) chunks.push(chunk);
     });
     request.on("end", () => { if (rejected) return; try { const body = JSON.parse(Buffer.concat(chunks).toString("utf8")); if (!body || typeof body !== "object" || Array.isArray(body)) throw new Error("object required"); resolve(body); } catch { reject(new HttpError(400, "invalid_json", "JSON 格式无效。")); } });
@@ -19,8 +20,19 @@ function readJson(request, maximum = limit) {
   });
 }
 
-export function createApi(store, version, modelClient, { plugins = new PluginService(store), agent = new PluginAgent(store, plugins, modelClient) } = {}) {
+export function createApi(store, version, modelClient, { plugins = new PluginService(store), agent = new PluginAgent(store, plugins, modelClient),
+  intelligence = new Intelligence(store, modelClient) } = {}) {
   const attempts = new Map();
+  const intelActions = {
+    refresh: userId => intelligence.enqueue(userId, true),
+    sources: (userId, data) => intelligence.addSource(userId, data),
+    source: (userId, data) => intelligence.sourceAction(userId, data.id, data.action),
+    subscriptions: (userId, data) => intelligence.addRule(userId, data),
+    unsubscribe: (userId, data) => intelligence.removeRule(userId, data.id),
+    saved: (userId, data) => intelligence.saveArticle(userId, data),
+    read: (userId, data) => intelligence.markAlerts(userId, data.id),
+    brief: (userId, data) => intelligence.makeBrief(userId, data),
+  };
   return async (request, response, pathname, json) => {
     if (!pathname.startsWith("/api/")) return false;
     const method = request.method;
@@ -75,6 +87,23 @@ export function createApi(store, version, modelClient, { plugins = new PluginSer
       }
       if (pathname === "/api/logout" && method === "POST") { store.logout(token); setSession(""); json(200, { authenticated: false }); return true; }
       if (!authenticated) throw new HttpError(401, "authentication_required", "请先登录账号。");
+      if (pathname === '/api/intelligence' && method === 'GET') {
+        intelligence.enroll(user.id);
+        intelligence.enqueue(user.id);
+        const since = new URL(request.url, 'http://localhost').searchParams.get('since');
+        json(200, since === intelligence.revision() ? { unchanged: true } : intelligence.overview(user.id));
+        return true;
+      }
+      const intelAction = pathname.match(/^\/api\/intelligence\/([a-z]+)$/)?.[1];
+      if (method === 'POST' && Object.hasOwn(intelActions, intelAction)) {
+        const input = await readJson(request, 20_000);
+        if (input.userId !== user.id) throw new HttpError(401, 'account_changed', '账号已切换，请重新登录。');
+        const value = await intelActions[intelAction](user.id, input);
+        if (intelAction !== 'refresh') intelligence.changed();
+        json(200, { ...intelligence.overview(user.id), ...(intelAction === 'brief' ? { briefId: value.id } : {}),
+          ...(intelAction === 'refresh' ? { queued: value } : {}) });
+        return true;
+      }
       const pluginBody = async () => {
         const input = await readJson(request, 128_000);
         if (input.userId !== user.id) throw new HttpError(401, "account_changed", "账号已切换，请重新登录。");
