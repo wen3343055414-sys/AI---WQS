@@ -1,6 +1,9 @@
 import {
   CATEGORIES,
   MODELS,
+  CHAT_MODES,
+  CHAT_ROLES,
+  MAX_CHAT_MEMBERS,
   MAX_FILE_SIZE,
   MAX_DOCUMENT_CHARS,
   createInitialState,
@@ -11,8 +14,15 @@ import {
   escapeHtml as e,
   markdown,
   beginChat,
+  beginChatPlan,
   chatMessages,
+  chatPlanMessages,
   finishChat,
+  finishChatPlanStep,
+  failChatPlanStep,
+  retryChatPlanStep,
+  pendingChatSteps,
+  validateChatSetup,
   removeSession,
   searchWorkspace,
   STARTERS,
@@ -69,6 +79,13 @@ const paths = {
   info: '<circle cx="12" cy="12" r="9"/><path d="M12 11v6M12 7h.01"/>',
   folder: '<path d="M3 5h7l2 3h9v12H3V5Z"/>',
   check: '<path d="m5 12 4 4L19 6"/>',
+  users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2m20 0v-2a4 4 0 0 0-3-3.9M16 3.2a4 4 0 0 1 0 7.6"/><circle cx="9" cy="7" r="4"/>',
+  workflow: '<rect x="9" y="2.5" width="6" height="6" rx="1.5"/><rect x="3" y="15.5" width="6" height="6" rx="1.5"/><rect x="15" y="15.5" width="6" height="6" rx="1.5"/><path d="M12 8.5V12M6 15.5V12h12v3.5"/>',
+  at: '<circle cx="11" cy="12" r="3.3"/><path d="M14.3 8.7v4.5a2.3 2.3 0 0 0 4.5.6 8 8 0 1 0-3.5 5.1"/>',
+  "arrow-up": '<path d="M12 19V5m-6 6 6-6 6 6"/>',
+  orbit: '<circle cx="12" cy="12" r="8"/><path d="M4.8 15.4C2 17.7 8 17 13.7 13.7 19.3 10.4 23 5.5 19 7.1"/><circle cx="12" cy="12" r="1" fill="currentColor" stroke="none"/>',
+  waves: '<path d="M3 9c3.3 0 3.3-3 6.5-3s3.3 3 6.5 3 3.3-3 5-3M3 14c3.3 0 3.3-3 6.5-3s3.3 3 6.5 3 3.3-3 5-3M3 19c3.3 0 3.3-3 6.5-3s3.3 3 6.5 3 3.3-3 5-3"/>',
+  diamond: '<path d="M12 2.5c1 5 4.5 8.5 9.5 9.5-5 1-8.5 4.5-9.5 9.5-1-5-4.5-8.5-9.5-9.5 5-1 8.5-4.5 9.5-9.5Z" fill="currentColor" stroke="none"/>',
 };
 const icon = (name) =>
   `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.file}</svg>`;
@@ -106,7 +123,7 @@ const initial = readState({ getItem: (key) => localStorage.getItem(key) });
 let state = initial.state;
 let sync;
 let modelConfig = { ready: false, model: '', provider: '', message: '正在读取服务端模型配置' };
-let modelConfigPending = false, modelConfigChecked = 0, chatPending = null, chatAccountCycle = 0;
+let modelConfigPending = null, modelConfigChecked = 0, chatPending = null, chatAccountCycle = 0;
 let newServerVersion = "";
 let promptFilter = "全部",
   promptQuery = "",
@@ -118,6 +135,9 @@ let promptFilter = "全部",
 let pluginConnections = [], pluginHistory = [], pluginError = "", pluginsLoaded = false, pluginLoading = false, pluginChecked = 0, pluginViewDirty = false;
 const selectedPluginIds = new Set(), pluginDetailsCache = new Map(), pluginApprovals = new Map();
 const drafts = new Map();
+const chatMentions = new Map();
+const emptyChatSetup = { mode: "single", members: [], leadKey: "" };
+let newChatSetup = emptyChatSetup, chatQuery = "", chatPanel = "", mentionIndex = 0;
 let pendingType = "AI 对话";
 let focusNewConversation = false;
 let toastTimer;
@@ -160,8 +180,7 @@ function persist(next) {
   }
   state = next;
 }
-function activeModel() {
-  const key = state.settings.modelKey;
+function activeModel(key = state.settings.modelKey) {
   if (!key) return modelConfig;
   const model = (modelConfig.models || []).find(item => item.key === key);
   return model ? { ...model, model: model.id, ready: true, message: '已选择服务端提供的模型。' }
@@ -176,34 +195,48 @@ function aiModelOptions() {
     [...groups.values()].map(group => `<optgroup label="${e(group.provider)}">${group.models.map(model => `<option value="${e(model.key)}" ${key === model.key ? 'selected' : ''}>${e(model.name)}${model.name !== model.id ? ` · ${e(model.id)}` : ''}</option>`).join('')}</optgroup>`).join('');
 }
 function modelPrivacy() {
-  return activeModel().ready ? `消息和选入的资料会发送给 ${activeModel().provider}。` : '消息和选入的资料会发送给所选模型服务。';
+  const setup = route().page === "chat" ? chatSetup() : emptyChatSetup;
+  if (setup.mode === "single" && activeModel().ready) return `消息和选入的资料会发送给 ${activeModel().provider}。`;
+  return '消息和选入的资料会发送给所选模型服务。';
 }
-async function refreshModelConfig(force = false) {
-  if (!sync?.authenticated || modelConfigPending || (!force && Date.now() - modelConfigChecked < 5000)) return;
-  modelConfigPending = true;
+function refreshModelConfig(force = false) {
+  if (!sync?.authenticated) return;
+  if (modelConfigPending) return modelConfigPending;
+  if (!force && Date.now() - modelConfigChecked < 5000) return;
   const accountCycle = chatAccountCycle;
-  try {
-    const value = await sync.request('/api/model-config');
-    if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
-    const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
-    modelConfig = value;
-    const current = activeModel();
-    document.querySelectorAll('[data-model-label]').forEach(element => { element.textContent = current.ready ? current.model : '模型未就绪'; });
-    document.querySelectorAll('[data-model-summary]').forEach(element => { element.textContent = current.message || ''; });
-    document.querySelectorAll('[data-model-problem]').forEach(element => { element.hidden = current.ready; });
-    if (changed && !chatPending) document.querySelectorAll('[data-setting="modelKey"]').forEach(select => { if (document.activeElement !== select) select.innerHTML = aiModelOptions(); });
-    const send = document.querySelector('#message-form button[type=submit]');
-    if (send) send.disabled = Boolean(chatPending || !current.ready || hasPluginApproval());
-  } catch { if (accountCycle === chatAccountCycle) modelConfig = { ready: false, model: '', provider: '', message: '无法读取服务端模型配置，请稍后重试。' }; }
-  finally { if (accountCycle === chatAccountCycle) { modelConfigChecked = Date.now(); modelConfigPending = false; } }
+  modelConfigPending = (async () => {
+    try {
+      const value = await sync.request('/api/model-config').catch(() => ({ ready: false, model: '', provider: '', message: '无法读取模型配置，请稍后重试。' }));
+      if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
+      const changed = JSON.stringify(value) !== JSON.stringify(modelConfig);
+      modelConfig = value;
+      const current = activeModel();
+      document.querySelectorAll('[data-model-label]').forEach(element => { element.textContent = current.ready ? current.model : '模型未就绪'; });
+      if (changed) {
+        const selector = document.querySelector('[data-setting="modelKey"]');
+        if (selector && document.activeElement !== selector) selector.innerHTML = aiModelOptions();
+        const roster = document.querySelector('#chat-members-body');
+        if (roster) {
+          const focusedClose = roster.querySelector(".chat-members-close") === document.activeElement;
+          roster.innerHTML = chatMemberRows(chatSession());
+          if (focusedClose) roster.querySelector(".chat-members-close")?.focus();
+        }
+      }
+      syncComposerState();
+    } finally {
+      if (accountCycle === chatAccountCycle) { modelConfigChecked = Date.now(); modelConfigPending = null; }
+    }
+  })();
+  return modelConfigPending;
 }
 function hasPluginApproval(sessionId = route().id) {
   return Boolean(sessionId && state.tasks.some(task => task.sessionId === sessionId && pluginApprovals.has(task.id)));
 }
 function chatRequestNotice(session) {
   if (!session) return "";
-  if (chatPending?.sessionId === session.id) return `<div class="model-request-status" role="status"><span class="model-spinner"></span>${chatPending.pluginPhase === "executing" ? "正在执行已确认的插件操作并整理结果…" : chatPending.pluginPhase ? "正在处理插件协作，请稍候…" : "模型正在回复，请稍候…"}</div>`;
-  const task = state.tasks.find(item => item.sessionId === session.id);
+  const task = latestChatTask(session);
+  if (task?.chatPlan) return chatPlanFeedback(task);
+  if (chatPending?.sessionId === session.id && !chatPending.steps) return `<div class="model-request-status" role="status"><span class="model-spinner"></span>${chatPending.pluginPhase === "executing" ? "正在执行已确认的插件操作并整理结果…" : chatPending.pluginPhase ? "正在处理插件协作，请稍候…" : "模型正在回复，请稍候…"}</div>`;
   if (!task || !["pending", "failed"].includes(task.status) || !task.requestId) return "";
   if (pluginApprovals.has(task.id)) return pluginApprovalView(task.id, pluginApprovals.get(task.id));
   return `<div class="model-request-status failed" role="status"><span>${e(task.error || "上次请求结果尚未确认，可尝试恢复回复。")}</span>${task.pluginUncertain ?
@@ -212,13 +245,16 @@ function chatRequestNotice(session) {
 }
 async function sendChat(content, draftKey) {
   if (chatPending) throw new Error('请等待当前回复完成。');
-  if (hasPluginApproval()) throw new Error('请先确认或取消当前插件操作。');
-  const pluginIds = [...selectedPluginIds];
+  const from = route();
+  const session = from.page === "chat" ? chatSession() : null;
+  if (hasPluginApproval(session?.id)) throw new Error('请先确认或取消当前插件操作。');
+  const setup = from.page === "chat" ? chatSetup(session) : emptyChatSetup;
+  const modelKey = state.settings.modelKey || "";
+  const mentionKey = chatMentions.get(draftKey) || "";
+  const pluginIds = setup.mode === "single" ? [...selectedPluginIds] : [];
   const accountCycle = chatAccountCycle;
   await refreshModelConfig(true);
   if (accountCycle !== chatAccountCycle) return;
-  if (chatPending) throw new Error('请等待当前回复完成。');
-  if (!activeModel().ready || !sync?.authenticated) throw new Error(activeModel().message || '请先登录并在服务端配置模型接口。');
   if (pluginIds.length) {
     await refreshPlugins(true);
     if (accountCycle !== chatAccountCycle) return;
@@ -226,11 +262,39 @@ async function sendChat(content, draftKey) {
     if (pluginIds.some(id => !pluginConnections.some(connection => connection.id === id && pluginReady(connection))))
       throw new Error("所选插件已不可用，请重新选择。");
   }
-  const result = mutate(next => beginChat(next, route().page === 'chat' ? route().id : '', content, pendingType, next.settings.modelKey || '', pluginIds));
-  drafts.delete(draftKey);
-  const input = document.querySelector('#message-input'); if (input) input.value = '';
+  if (accountCycle !== chatAccountCycle || route().page !== from.page || route().id !== from.id) return;
+  if (chatPending) throw new Error('请等待当前回复完成。');
+  const problem = chatComposerProblem(setup, mentionKey, activeModel(modelKey));
+  if (!sync?.authenticated || problem) throw new Error(problem?.text || '请先登录并配置模型。');
+  const result = mutate(next => {
+    if (setup.mode !== "single") return beginChatPlan(next, session?.id, content, pendingType, setup, modelConfig.models, mentionKey);
+    const started = beginChat(next, session?.id, content, pendingType, modelKey, pluginIds);
+    if (from.page === "chat" && (session?.chatSetup || setup.members.length))
+      next.sessions.find(item => item.id === started.sessionId).chatSetup = setup;
+    return started;
+  });
+  const input = document.querySelector('#message-input');
+  if (input?.value === content) input.value = '';
+  chatMentions.delete(draftKey);
+  if (from.page === "chat" && !session) newChatSetup = emptyChatSetup;
+  chatPanel = "";
   pendingType = 'AI 对话'; go('chat', result.sessionId);
-  await performChat(result.taskId);
+  await (setup.mode === "single" ? performChat(result.taskId) : performChatPlan(result.taskId));
+}
+async function flushBeforeChat(accountCycle) {
+  const until = Date.now() + 15000;
+  while (sync.pending || sync.busy) {
+    if (accountCycle !== chatAccountCycle || !sync.authenticated) return false;
+    if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
+    if (Date.now() > until) throw new Error('对话尚未保存到本机，请恢复连接后重新请求。');
+    if (!sync.busy) await sync.flush();
+    if (sync.pending || sync.busy) await new Promise(resolve => setTimeout(resolve, 150));
+  }
+  return accountCycle === chatAccountCycle && sync.authenticated;
+}
+function requestChat(input) {
+  return sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ ...input, userId: sync.user?.id }), signal: AbortSignal.timeout(140000) });
 }
 async function performChat(taskId) {
   if (chatPending) throw new Error('已有对话正在回复。');
@@ -241,17 +305,9 @@ async function performChat(taskId) {
   render();
   try {
     const session = state.sessions.find(item => item.id === task.sessionId);
-    const input = { requestId: task.requestId, userId: sync.user?.id, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}), ...(task.pluginIds?.length ? { pluginIds: task.pluginIds } : {}) };
-    const until = Date.now() + 15000;
-    while (sync.pending || sync.busy) {
-      if (sync.conflict) throw new Error('请先处理工作空间同步冲突，再重新请求。');
-      if (accountCycle !== chatAccountCycle) return;
-      if (!sync.authenticated || Date.now() > until) throw new Error('对话尚未保存到本机，请恢复连接后重新请求。');
-      if (!sync.busy) await sync.flush();
-      if (sync.pending || sync.busy) await new Promise(resolve => setTimeout(resolve, 150));
-    }
-    if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
-    let result = await sync.request('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(input), signal: AbortSignal.timeout(140000) });
+    const input = { requestId: task.requestId, assistant: task.assistant || state.settings.model, messages: chatMessages(session, task.userMessageId), ...(task.modelKey ? { modelKey: task.modelKey } : {}), ...(task.pluginIds?.length ? { pluginIds: task.pluginIds } : {}) };
+    if (!await flushBeforeChat(accountCycle)) return;
+    let result = await requestChat(input);
     if (accountCycle !== chatAccountCycle || !sync.authenticated) return;
     if (task.pluginIds?.length) {
       result = await waitPluginRun(result, accountCycle);
@@ -267,6 +323,59 @@ async function performChat(taskId) {
     mutate(next => { const item = next.tasks.find(item => item.id === taskId); if (item) { item.status = item.pluginIds?.length && ![400, 403, 404, 409, 413, 422].includes(error.status) ? 'pending' : 'failed'; item.error = message.slice(0, 500); } });
     toast(message, true);
   } finally { if (accountCycle === chatAccountCycle) { chatPending = null; render(); } }
+}
+async function performChatPlan(taskId) {
+  if (chatPending) throw new Error("请等待当前回复完成。");
+  const read = () => state.tasks.find(task => task.id === taskId);
+  const task = read();
+  if (!task?.chatPlan) throw new Error("未找到本轮协作进度。");
+  const cycle = chatAccountCycle;
+  const activity = { taskId, sessionId: task.sessionId, steps: new Set() };
+  const isCurrent = () => cycle === chatAccountCycle && sync.authenticated && read()?.chatPlan;
+  chatPending = activity;
+  render();
+  const run = async index => {
+    if (!isCurrent()) return;
+    const current = read();
+    const step = current.chatPlan.steps[index];
+    const session = state.sessions.find(item => item.id === current.sessionId);
+    const stillPending = () => {
+      const latest = isCurrent() && read().chatPlan.steps[index];
+      return latest?.status === "pending" && latest.requestId === step.requestId;
+    };
+    activity.steps.add(index);
+    refreshChatActivity(current.sessionId);
+    let submitted = false;
+    try {
+      const messages = chatPlanMessages(session, current, index);
+      submitted = true;
+      const result = await requestChat({ requestId: step.requestId, assistant: current.assistant, messages, modelKey: step.modelKey });
+      if (stillPending()) mutate(next => finishChatPlanStep(next, taskId, index, result));
+    } catch (error) {
+      if (!stillPending()) return;
+      const uncertain = submitted && (error.name === "TimeoutError" || error.name === "TypeError" || error.message.startsWith("连接暂时不可用"));
+      const message = uncertain ? "回复连接中断，可恢复本次请求。" : error.message;
+      mutate(next => failChatPlanStep(next, taskId, index, message, uncertain));
+    } finally {
+      activity.steps.delete(index);
+      if (cycle === chatAccountCycle) refreshChatActivity(current.sessionId);
+    }
+  };
+  try {
+    if (!await flushBeforeChat(cycle)) return;
+    const nextSteps = pendingChatSteps(read());
+    let offset = 0;
+    const worker = async () => {
+      while (offset < nextSteps.length && isCurrent() && !sync.conflict) await run(nextSteps[offset++]);
+    };
+    await Promise.all([worker(), worker()]);
+    const summary = isCurrent() && pendingChatSteps(read()).find(index => read().chatPlan.steps[index].role === "summary");
+    if (Number.isInteger(summary) && !nextSteps.includes(summary) && await flushBeforeChat(cycle)) await run(summary);
+  } catch (error) {
+    if (cycle === chatAccountCycle) toast(error.message, true);
+  } finally {
+    if (cycle === chatAccountCycle) { chatPending = null; refreshChatActivity(task.sessionId); }
+  }
 }
 window.addEventListener('beforeunload', event => { if (chatPending) { event.preventDefault(); event.returnValue = ''; } });
 setInterval(() => { if (!document.hidden) refreshModelConfig(); }, 8000);
@@ -321,8 +430,14 @@ function modelOptions() {
     )
     .join("");
 }
-function composer(home = false) {
-  const key = home ? "home" : route().id || "new";
+function composerModelControls() {
+  const plugins = selectedPluginIds.size ? `插件 ${selectedPluginIds.size}` : "插件";
+  return `${button("plugin-picker", `<span data-plugin-choice-label>${plugins}</span>`, "puzzle", "composer-plugin" + (selectedPluginIds.size ? " active" : ""), sync?.authenticated ? "" : "disabled")}
+    <select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select>
+    <select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select>`;
+}
+function composer() {
+  const key = "home";
   const model = activeModel();
   return `<form class="composer" id="message-form" data-draft="${e(key)}">
     <label class="visually-hidden" for="message-input">输入消息</label>
@@ -330,16 +445,77 @@ function composer(home = false) {
     <div class="composer-bottom">
       <div class="composer-controls">
         ${iconButton("attach", "从知识库添加文本", "clip")}
-        ${button("plugin-picker", '<span data-plugin-choice-label>' + (selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件") + "</span>", "puzzle", "composer-plugin" + (selectedPluginIds.size ? " active" : ""), sync?.authenticated ? "" : "disabled")}
-        <select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select>
-        <select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select>
+        ${composerModelControls()}
       </div>
       <div class="composer-submit">
         ${iconButton("data-use", "查看消息如何处理", "shield")}
-        <button type="submit" class="btn btn-primary" ${chatPending || !model.ready || (!home && hasPluginApproval()) ? "disabled" : ""}>${chatPending ? "等待回复…" : "发送"}${icon("arrow")}</button>
+        <button type="submit" class="btn btn-primary" ${chatPending || !model.ready ? "disabled" : ""}>${chatPending ? "等待回复…" : "发送"}${icon("arrow")}</button>
       </div>
     </div>
     <div class="composer-problem" data-model-problem ${model.ready ? "hidden" : ""} role="status"><span data-model-summary>${e(model.message)}</span> <a href="#settings">查看连接</a></div>
+  </form>`;
+}
+function chatComposerProblem(setup, mentionKey, model = activeModel()) {
+  if (setup.mode === "single") return model.ready ? null : { text: model.message, action: "settings" };
+  const models = modelConfig.models || [];
+  if (!models.length) return { text: "请先连接模型", action: "settings" };
+  const selected = mentionKey ? setup.members.filter(member => member.modelKey === mentionKey) : setup.members;
+  if (selected.some(member => !models.some(item => item.key === member.modelKey)))
+    return { text: "部分成员已停用", action: "team" };
+  if (selected.length < (mentionKey ? 1 : 2)) return { text: "请选择至少两个模型", action: "team" };
+  return null;
+}
+function syncComposerState() {
+  const form = document.querySelector("#message-form");
+  if (!form) return;
+  const isChat = form.classList.contains("chat-input");
+  const session = isChat ? chatSession() : null;
+  const problem = chatComposerProblem(isChat ? chatSetup(session) : emptyChatSetup, chatMentions.get(form.dataset.draft));
+  const status = form.querySelector("[data-model-problem]");
+  status.hidden = !problem;
+  status.querySelector("[data-model-summary]").textContent = problem?.text || "";
+  const team = status.querySelector("[data-chat-team-problem]");
+  if (team) team.hidden = problem?.action !== "team";
+  const settings = status.querySelector('a[href="#settings"]');
+  settings.hidden = problem?.action !== "settings";
+  const sending = Boolean(chatPending);
+  const send = form.querySelector("button[type=submit]");
+  send.disabled = sending || Boolean(problem) || (isChat && hasPluginApproval(session?.id));
+  if (isChat) {
+    const mentionToggle = form.querySelector('[data-action="chat-open-mention"]');
+    if (mentionToggle) mentionToggle.disabled = !chatMembers(session).some(member => member.ready);
+    send.setAttribute("aria-label", sending ? "等待回复" : "发送");
+    send.title = sending ? "等待回复" : "发送（Enter）";
+    if (sending !== Boolean(send.querySelector(".chat-send-spinner"))) {
+      send.innerHTML = sending ? '<span class="chat-send-spinner"></span>' : icon("arrow-up");
+    }
+  }
+}
+function chatComposer(session) {
+  const setup = chatSetup(session);
+  const key = session?.id || "new";
+  const single = setup.mode === "single";
+  const mentionKey = single ? "" : chatMentions.get(key);
+  const member = mentionKey && chatMembers(session, setup).find(item => item.modelKey === mentionKey);
+  const problem = chatComposerProblem(setup, mentionKey);
+  const placeholder = setup.mode === "collaborate" && !member ? "输入协作任务…" : setup.mode === "group" && !member ? "发给群聊成员…" : "输入消息…";
+  return `<form class="composer chat-input" id="message-form" data-draft="${e(key)}">
+    <label class="visually-hidden" for="message-input">输入消息</label>
+    ${member ? button("chat-clear-mention", `<span>@${e(member.name)}</span>${icon("close")}`, "", "chat-mention-chip", `aria-label="取消指定 ${e(member.name)}"`) : ""}
+    <textarea id="message-input" name="message" ${single ? "" : 'aria-controls="chat-mention-menu"'} maxlength="20000" required placeholder="${placeholder}">${e(drafts.get(key) || "")}</textarea>
+    <div class="composer-bottom"><div class="composer-controls">
+      ${iconButton("attach", "从知识库添加文本", "clip")}
+      ${single ? composerModelControls() :
+      iconButton("chat-open-mention", "@ 指定成员", "at", `aria-expanded="false" aria-controls="chat-mention-menu" ${chatMembers(session, setup).some(item => item.ready) ? "" : "disabled"}`)}
+    </div><div class="composer-submit">
+      ${iconButton("data-use", "查看消息如何处理", "shield")}
+      <button type="submit" class="chat-send" aria-label="${chatPending ? "等待回复" : "发送"}" title="${chatPending ? "等待回复" : "发送（Enter）"}" ${chatPending || problem || hasPluginApproval(session?.id) ? "disabled" : ""}>${chatPending ? '<span class="chat-send-spinner"></span>' : icon("arrow-up")}</button>
+    </div></div>
+    ${single ? "" : '<div id="chat-mention-menu" class="chat-mention-menu" role="listbox" aria-label="指定回复成员" hidden></div>'}
+    <div class="composer-problem chat-composer-problem" data-model-problem ${problem ? "" : "hidden"} role="status"><span data-model-summary>${e(problem?.text || "")}</span>
+      <a href="#settings" ${problem?.action === "settings" ? "" : "hidden"}>配置模型</a>
+      ${button("chat-team", "选择成员", "", "chat-inline-action", `data-chat-team-problem ${problem?.action === "team" ? "" : "hidden"}`)}
+    </div>
   </form>`;
 }
 function promptCard(p) {
@@ -396,7 +572,7 @@ function homePage() {
   const favorites = state.prompts.filter(prompt => prompt.favorite).slice(0, 3);
   return `<div class="home-hub">
     ${heading("开始对话")}
-    ${composer(true)}
+    ${composer()}
     ${starterButtons()}
   </div>
   <div class="home-collections">
@@ -794,30 +970,292 @@ function historyPage() {
     button("export-history", "导出对话", "download", "btn")) +
     `<div class="toolbar">${searchField("history-search", "搜索对话…", historyQuery)}</div><div id="history-results" aria-live="polite">${historyResults()}</div>`;
 }
+const chatModeIcon = { single: "chat", group: "users", collaborate: "workflow" };
+const chatClock = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Shanghai" });
+const chatDay = new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeZone: "Asia/Shanghai" });
+const chatShortDate = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", timeZone: "Asia/Shanghai" });
+
+function chatSession() {
+  return state.sessions.find(session => session.id === route().id);
+}
+function chatSetup(session = chatSession()) {
+  return session ? session.chatSetup || emptyChatSetup : newChatSetup;
+}
+function saveChatSetup(session, setup) {
+  if (!validateChatSetup(setup)) throw new Error("成员配置无效，请重新选择。");
+  if (session) mutate(next => { next.sessions.find(item => item.id === session.id).chatSetup = setup; });
+  else newChatSetup = setup;
+  const key = session?.id || "new";
+  if (setup.mode === "single" || !setup.members.some(member => member.modelKey === chatMentions.get(key))) chatMentions.delete(key);
+}
+function latestChatTask(session) {
+  if (!session) return;
+  if (chatPending?.sessionId === session.id) {
+    const active = state.tasks.find(item => item.id === chatPending.taskId);
+    if (active) return active;
+  }
+  return state.tasks.find(item => item.sessionId === session.id);
+}
+function chatMembers(session, setup = chatSetup(session)) {
+  if (setup.mode === "single") {
+    const model = activeModel();
+    const selected = (modelConfig.models || []).find(item => item.key === (state.settings.modelKey || modelConfig.defaultModelKey));
+    return model.ready ? [{ ...model, ...selected, name: selected?.name || model.model, ready: true }] : [];
+  }
+  return setup.members.map(member => {
+    const model = (modelConfig.models || []).find(item => item.key === member.modelKey);
+    const previous = session?.messages.findLast(message => message.author?.modelKey === member.modelKey)?.author;
+    return { ...member, name: model?.name || model?.id || previous?.name || "已停用模型",
+      provider: model?.provider || previous?.provider || "", ready: Boolean(model) };
+  });
+}
+function chatModelAvatar(name = "", provider = "") {
+  const identity = `${name} ${provider}`.toLowerCase();
+  let color = "violet", shape = "spark";
+  if (/deepseek|深度求索/.test(identity)) { color = "blue"; shape = "waves"; }
+  else if (/anthropic|claude/.test(identity)) { color = "coral"; shape = "sun"; }
+  else if (/gemini|google/.test(identity)) { color = "violet"; shape = "diamond"; }
+  else if (/openai|chatgpt|\bgpt|codex/.test(identity)) { color = "mint"; shape = "orbit"; }
+  else if (/qwen|通义/.test(identity)) { color = "violet"; shape = "layers"; }
+  else if (/grok|moonshot|kimi/.test(identity)) { color = "slate"; shape = "orbit"; }
+  else if (identity.trim()) {
+    const options = [["violet", "diamond"], ["blue", "waves"], ["mint", "orbit"], ["coral", "sun"], ["slate", "spark"]];
+    const code = Array.from(identity).reduce((value, character) => (value * 31 + character.codePointAt(0)) >>> 0, 0);
+    [color, shape] = options[code % options.length];
+  }
+  return `<span class="chat-model-avatar model-${color}" aria-hidden="true">${icon(shape)}</span>`;
+}
+function chatConversationRows(session) {
+  const sessions = sortedConversations(chatQuery);
+  const draft = !session && !chatQuery.trim() ? [{ id: "", title: "新对话", chatSetup: newChatSetup }] : [];
+  const today = chatDay.format(new Date());
+  const rows = [...draft, ...sessions].map(item => {
+    const active = (session?.id || "") === item.id;
+    const mode = item.chatSetup?.mode || "single";
+    const last = item.messages?.at(-1);
+    const preview = last?.demo ? item.messages.findLast(message => message.role === "user") : last;
+    const excerpt = preview?.content.replace(/^#+\s+/, "").replace(/\s+/g, " ").trim();
+    const date = item.updatedAt && new Date(item.updatedAt);
+    return `<a class="session-link${active ? " active" : ""}" href="#chat${item.id ? `/${e(item.id)}` : ""}" ${active ? 'aria-current="page"' : ""} title="${e(item.title)}">
+      <span class="chat-session-icon mode-${mode}">${icon(chatModeIcon[mode])}</span><span class="chat-session-copy"><strong>${e(item.title)}</strong>
+      ${excerpt && excerpt !== item.title ? `<small>${e((preview.author ? `${preview.author.name} · ` : "") + excerpt.slice(0, 95))}</small>` : ""}</span>
+      ${date ? `<time datetime="${e(item.updatedAt)}">${chatDay.format(date) === today ? chatClock.format(date) : chatShortDate.format(date)}</time>` : ""}</a>`;
+  }).join("");
+  return rows || '<p class="chat-list-empty">没有匹配的会话</p>';
+}
+function chatStepState(task, step, index) {
+  if (chatPending?.taskId === task.id && chatPending.steps?.has(index)) return ["working", "回复中", '<span class="chat-step-spinner"></span>'];
+  if (step.status === "success") return ["done", "已完成", icon("check")];
+  if (step.status === "failed") return ["failed", "失败", icon("info")];
+  if (step.error) return ["waiting", "待恢复", icon("history")];
+  return ["waiting", "等待中", '<i class="chat-step-dot"></i>'];
+}
+function chatPlanFeedback(task) {
+  if (task.status === "success") return "";
+  const active = chatPending?.taskId === task.id;
+  const steps = task.chatPlan.steps.map((step, index) => {
+    if (step.status === "success") return "";
+    const [status, text, mark] = chatStepState(task, step, index);
+    return `<div class="chat-plan-feedback-row" data-status="${status}">${chatModelAvatar(step.name, step.provider)}<div><strong>${e(step.name)}${step.role === "summary" ? " · 汇总" : ""}</strong>
+      ${step.error ? `<small>${e(step.error)}</small>` : ""}</div><span class="chat-step-label">${mark}${text}</span>
+      ${!active && step.status === "failed" ? button("chat-retry-step", "重试", "refresh", "chat-inline-action", `data-id="${e(task.id)}" data-step="${index}" aria-label="重试 ${e(step.name)}${step.role === "summary" ? " 汇总" : ""}"`) : ""}</div>`;
+  }).join("");
+  return `<section class="chat-plan-feedback" aria-label="回复状态">${steps}${!active && pendingChatSteps(task).length ?
+    button("chat-resume-plan", "恢复回复", "history", "chat-inline-action", `data-id="${e(task.id)}"`) : ""}</section>`;
+}
+function chatProgress(session) {
+  const setup = chatSetup(session);
+  const task = latestChatTask(session);
+  if (task?.chatPlan?.mode !== "collaborate") {
+    if (setup.mode !== "collaborate" || !setup.members.length) return "";
+    const lead = chatMembers(session, setup).find(member => member.modelKey === setup.leadKey);
+    return `<section class="chat-progress"><h3>协作流程</h3><ol><li>${icon("users")}<span>成员分工</span></li><li>${icon("layers")}<span>汇总答复<small>${e(lead.name)}</small></span></li></ol></section>`;
+  }
+  const { steps } = task.chatPlan;
+  const complete = steps.filter(step => step.status === "success").length;
+  return `<section class="chat-progress"><h3>协作进度 <span>${complete}/${steps.length}</span></h3><ol>${steps.map((step, index) => {
+    const [status, text, mark] = chatStepState(task, step, index);
+    return `<li data-status="${status}"><span class="chat-progress-mark">${mark}</span><span>${e(step.role === "summary" ? "汇总答复" : CHAT_ROLES[step.role])}<small>${e(step.name)}</small></span><span class="chat-step-text">${text}</span></li>`;
+  }).join("")}</ol></section>`;
+}
+function chatMemberRows(session) {
+  const setup = chatSetup(session);
+  const members = chatMembers(session, setup);
+  const single = setup.mode === "single";
+  const hasModels = (modelConfig.models || []).length > 0;
+  return `<div class="chat-panel-title"><h2>成员${members.length > 1 ? `<span>${members.length}</span>` : ""}</h2><div>
+    ${members.length || hasModels ? iconButton("chat-team", single ? "添加模型" : "编辑成员", single ? "plus" : "settings") : ""}
+    ${button("chat-close-panel", "", "close", "icon-button chat-members-close", 'aria-label="关闭成员" title="关闭成员"')}</div></div>
+    ${members.length ? `<ul class="chat-member-list">${members.map(member => {
+      const detail = member.ready ? (setup.mode === "collaborate" ? CHAT_ROLES[member.role] : member.provider) : "已停用";
+      const label = `<span class="chat-member-copy"><strong>${e(member.name)}</strong>${detail ? `<small>${e(detail)}</small>` : ""}</span>`;
+      const body = `${chatModelAvatar(member.name, member.provider)}${label}`;
+      return `<li>${single || !member.ready ? `<div class="chat-member-row">${body}</div>` :
+        button("chat-mention", body + icon("at"), "", "chat-member-row", `data-id="${e(member.modelKey)}" aria-label="指定 ${e(member.name)} 回复"`)}</li>`;
+    }).join("")}</ul>` : hasModels ? button("chat-team", "添加模型", "plus", "chat-empty-members") :
+    `<a class="chat-empty-members" href="#settings">${icon("plus")}连接模型</a>`}`;
+}
+function chatWelcome(mode) {
+  const title = { single: "今天想聊点什么？", group: "想和大家聊点什么？", collaborate: "想一起完成什么？" }[mode];
+  return `<div class="chat-welcome"><div class="chat-hero" data-mode="${mode}" aria-hidden="true">
+    <div class="chat-hero-orbit"></div><div class="chat-hero-node chat-hero-left">${icon("waves")}</div>
+    <div class="chat-hero-node chat-hero-center">${icon(mode === "single" ? "spark" : chatModeIcon[mode])}</div><div class="chat-hero-node chat-hero-right">${icon("diamond")}</div>
+    </div><h2>${title}</h2><div class="chat-starters" role="group" aria-label="对话快捷方式">${STARTERS.map(starter =>
+      button("starter", `<span class="chat-starter-icon tone-${starter.tone}">${icon(starter.icon)}</span><span>${e(starter.title)}</span>`, "", "chat-starter", `data-id="${starter.id}"`)).join("")}</div></div>`;
+}
+function chatTranscript(session) {
+  if (!session?.messages.length) return chatWelcome(chatSetup(session).mode);
+  let previousDay;
+  const today = chatDay.format(new Date());
+  return session.messages.map(message => {
+    const date = new Date(message.createdAt);
+    const day = chatDay.format(date);
+    const divider = previousDay === day ? "" : `<div class="chat-date"><time datetime="${e(message.createdAt)}">${day === today ? "今天" : e(day)}</time></div>`;
+    previousDay = day;
+    const { author } = message;
+    const user = message.role === "user";
+    const name = user ? "你" : author?.name || (message.demo ? "历史演示消息" : message.model);
+    const role = author?.role === "summary" ? "汇总答复" : CHAT_ROLES[author?.role];
+    return `${divider}<article class="message ${message.role}${author?.role === "summary" ? " message-summary" : ""}">
+      ${user ? '<span class="chat-user-avatar" aria-hidden="true">我</span>' : chatModelAvatar(name, author?.provider)}
+      <div class="message-body"><div class="message-label"><strong>${e(name)}</strong>${role ? `<span class="message-role">${e(role)}</span>` : ""}<time datetime="${e(message.createdAt)}">${chatClock.format(date)}</time></div>
+      <div class="message-content">${user ? `${message.mention ? `<strong class="message-mention">@${e(message.mention)}</strong> ` : ""}${e(message.content)}` : markdown(message.content)}</div>
+      <div class="message-actions">${iconButton("copy-message", "复制消息", "copy", `data-id="${e(message.id)}"`)}${!user && !author ? iconButton("regenerate", "重新生成", "refresh", `data-id="${e(message.id)}"`) : ""}</div></div></article>`;
+  }).join("");
+}
 function chatPage() {
-  const session = state.sessions.find((s) => s.id === route().id);
-  return `<div class="chat-layout"><aside class="chat-sidebar" aria-label="历史会话">${button("new-chat", "新对话", "plus", "btn")}${[
-    ...state.sessions,
-  ]
-    .sort((a, b) => b.updatedAt.localeCompare(a.updatedAt))
-    .map(
-      (s) =>
-        `<a href="#chat/${s.id}" class="session-link ${session?.id === s.id ? "active" : ""}" ${session?.id === s.id ? 'aria-current="page"' : ""} title="${e(s.title)}">${e(s.title)}<small>${dateText(s.updatedAt)}</small></a>`,
-    )
-    .join(
-      "",
-    )}${!state.sessions.length ? '<p class="empty-history">暂无会话</p>' : ""}</aside><section class="chat-main" aria-label="AI 对话"><div class="chat-header"><h1 tabindex="-1" id="page-title">${session ? e(session.title) : "新对话"}</h1><div>${session ? rowActions("会话操作",
-    button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
-    button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div></div><div class="messages" id="messages" data-session-id="${e(session?.id || "")}">${
-    session
-      ? session.messages
-          .map(
-            (m) =>
-              `<article class="message ${m.role}"><div class="avatar">${m.role === "user" ? "我" : icon("spark")}</div><div class="message-body"><div class="message-label">${m.role === "user" ? "你" : `智作台 <span class="demo-badge">${m.demo ? "历史演示消息" : e(m.model)}</span>`}<time datetime="${e(m.createdAt)}">${dateText(m.createdAt, true)}</time></div><div class="message-content">${m.role === "user" ? e(m.content) : markdown(m.content)}</div><div class="message-actions">${button("copy-message", `${icon("copy")} 复制`, "", "btn btn-quiet", `data-id="${m.id}"`)}${m.role === "assistant" ? button("regenerate", `${icon("refresh")} 重新生成`, "", "btn btn-quiet", `data-id="${m.id}"`) : ""}</div></div></article>`,
-          )
-          .join("")
-      : `<div class="chat-welcome"><div class="brand-mark">${icon("spark")}</div>${starterButtons()}</div>`
-  }${chatRequestNotice(session)}</div><div class="chat-composer">${composer()}</div></section></div>`;
+  const session = chatSession();
+  const mode = chatSetup(session).mode;
+  const members = chatMembers(session);
+  const modeSwitch = Object.entries(CHAT_MODES).map(([key, label]) =>
+    button("chat-mode", label, chatModeIcon[key], "chat-mode-button", `data-id="${key}" aria-pressed="${mode === key}"`)).join("");
+  return `<div class="chat-layout" data-panel="${chatPanel}">
+    <aside class="chat-sidebar" id="chat-session-panel" aria-label="会话"><div class="chat-panel-title"><h2>会话</h2><div>${iconButton("new-chat", "新对话", "plus")}
+      ${button("chat-close-panel", "", "close", "icon-button chat-sessions-close", 'aria-label="关闭会话列表" title="关闭会话列表"')}</div></div>
+      ${searchField("chat-search", "搜索会话", chatQuery)}<div class="chat-session-list" id="chat-session-list">${chatConversationRows(session)}</div></aside>
+    <section class="chat-main" aria-label="AI 对话"><header class="chat-header">
+      <div class="chat-identity">${button("chat-open-panel", "", "sidebar-open", "icon-button chat-sessions-toggle", `data-id="sessions" aria-label="会话列表" title="会话列表" aria-controls="chat-session-panel" aria-expanded="${chatPanel === "sessions"}"`)}
+        <span class="chat-room-icon mode-${mode}">${icon(chatModeIcon[mode])}</span><div class="chat-room-copy"><h1 tabindex="-1" id="page-title" title="${e(session?.title || "新对话")}">${e(session?.title || "新对话")}</h1>
+        ${mode !== "single" && members.length ? `<span>${members.length} 个模型</span>` : ""}</div></div>
+      <div class="chat-mode-switch" role="group" aria-label="对话模式">${modeSwitch}</div>
+      <div class="chat-header-tools">${button("chat-open-panel", "", "users", "icon-button chat-members-toggle", `data-id="members" aria-label="成员" title="成员" aria-controls="chat-members-panel" aria-expanded="${chatPanel === "members"}"`)}
+      ${session ? rowActions("会话操作", button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
+        button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div>
+    </header><div class="messages${session?.messages.length ? "" : " chat-messages-empty"}" id="messages" data-session-id="${e(session?.id || "")}" aria-label="消息记录"><div class="chat-transcript">
+      <div id="chat-message-list" data-count="${session?.messages.length || 0}">${chatTranscript(session)}</div><div id="chat-request-status">${chatRequestNotice(session)}</div></div></div>
+    <div class="chat-composer">${chatComposer(session)}</div></section>
+    <button type="button" class="chat-panel-scrim" data-action="chat-close-panel" aria-label="关闭面板" tabindex="-1"></button>
+    <aside class="chat-members" id="chat-members-panel" aria-label="成员和协作"><div id="chat-members-body">${chatMemberRows(session)}</div><div id="chat-progress">${chatProgress(session)}</div></aside>
+  </div>`;
+}
+function refreshChatActivity(sessionId) {
+  const messages = document.querySelector("#messages");
+  if (messages?.dataset.sessionId === sessionId) {
+    const atEnd = messages.scrollHeight - messages.clientHeight - messages.scrollTop < 28;
+    const session = chatSession();
+    const list = document.querySelector("#chat-message-list");
+    if (session.messages.length !== Number(list.dataset.count)) {
+      list.innerHTML = chatTranscript(session);
+      list.dataset.count = session.messages.length;
+      document.querySelector("#chat-session-list").innerHTML = chatConversationRows(session);
+    }
+    document.querySelector("#chat-request-status").innerHTML = chatRequestNotice(session);
+    if (atEnd) messages.scrollTop = messages.scrollHeight;
+    document.querySelector("#chat-progress").innerHTML = chatProgress(session);
+  }
+  syncComposerState();
+}
+async function showChatTeam() {
+  const from = route();
+  await refreshModelConfig();
+  if (route().page !== from.page || route().id !== from.id || from.page !== "chat") return;
+  const session = chatSession();
+  const setup = chatSetup(session);
+  const catalog = modelConfig.models || [];
+  const mode = setup.mode === "single" ? "group" : setup.mode;
+  const selected = new Map(setup.members.map(member => [member.modelKey, member.role]));
+  const defaultKey = state.settings.modelKey || modelConfig.defaultModelKey;
+  if (!selected.size && catalog.some(model => model.key === defaultKey)) selected.set(defaultKey, "analysis");
+  const unavailable = chatMembers(session, { ...setup, mode }).filter(member => !member.ready)
+    .map(member => ({ key: member.modelKey, name: member.name, provider: "已停用" }));
+  const choices = [...catalog, ...unavailable];
+  const roles = Object.entries(CHAT_ROLES);
+  openDialog(mode === "collaborate" ? "协作成员" : "群聊成员", `<form id="chat-team-form" class="dialog-body" data-mode="${mode}">
+    ${choices.length ? `<div class="chat-team-list">${choices.map((model, index) => {
+      const name = model.name || model.id;
+      const selectedRole = selected.get(model.key);
+      return `<div class="chat-team-option"><label><input type="checkbox" name="members" value="${e(model.key)}" data-name="${e(name)}" ${selectedRole ? "checked" : ""}>
+        ${chatModelAvatar(name, model.provider)}<span><strong>${e(name)}</strong><small>${e(model.provider)}</small></span></label>
+        <select name="role-${e(model.key)}" class="input" aria-label="${e(name)} 的分工" data-role-for="${e(model.key)}" ${mode === "collaborate" ? "" : "hidden"}>${roles.map(([key, label]) =>
+          `<option value="${key}" ${key === (selectedRole || roles[index % roles.length][0]) ? "selected" : ""}>${label}</option>`).join("")}</select></div>`;
+    }).join("")}</div>` : '<a class="chat-empty-members" href="#settings">前往设置连接模型</a>'}
+    ${mode === "collaborate" && choices.length ? `<label class="chat-team-lead">汇总模型<select class="input" name="lead" data-lead="${e(setup.leadKey)}"></select></label>` : ""}
+    <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}
+      <button type="submit" class="btn btn-primary" ${choices.length ? "" : "disabled"}>保存成员</button></div></form>`, "chat-team-dialog");
+  syncChatTeamForm(dialog.querySelector("#chat-team-form"));
+}
+function syncChatTeamForm(form) {
+  const checks = [...form.querySelectorAll('[name="members"]')];
+  const selected = checks.filter(input => input.checked);
+  const keys = new Set(selected.map(input => input.value));
+  checks.forEach(input => { input.disabled = !input.checked && selected.length >= MAX_CHAT_MEMBERS; });
+  form.querySelectorAll("[data-role-for]").forEach(select => { select.disabled = !keys.has(select.dataset.roleFor); });
+  const lead = form.querySelector('[name="lead"]');
+  if (lead) {
+    const key = lead.value || lead.dataset.lead;
+    lead.innerHTML = selected.map(input => `<option value="${e(input.value)}">${e(input.dataset.name)}</option>`).join("");
+    if (keys.has(key)) lead.value = key;
+    lead.disabled = !selected.length;
+  }
+}
+function setChatPanel(panel, restoreFocus = true) {
+  const layout = document.querySelector(".chat-layout");
+  if (!layout) return;
+  const previous = chatPanel;
+  chatPanel = panel;
+  layout.dataset.panel = panel;
+  layout.querySelectorAll('[data-action="chat-open-panel"]').forEach(control => {
+    control.setAttribute("aria-expanded", String(control.dataset.id === panel));
+  });
+  if (panel) layout.querySelector(`.chat-${panel}-close`)?.focus();
+  else if (restoreFocus && previous) layout.querySelector(`.chat-${previous}-toggle`)?.focus();
+}
+function mentionFragment(input) {
+  const beforeCaret = input.value.slice(0, input.selectionStart);
+  return beforeCaret.match(/(?:^|[\s，。；、])@([^\s@，。；、]{0,40})$/u)?.[1];
+}
+function updateMentionMenu(query, reset = true) {
+  const menu = document.querySelector("#chat-mention-menu");
+  if (!menu) return;
+  const input = document.querySelector("#message-input");
+  const toggle = document.querySelector('[data-action="chat-open-mention"]');
+  const candidates = query === undefined ? [] : chatMembers(chatSession()).filter(member => member.ready &&
+    `${member.name} ${member.provider}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  if (reset) mentionIndex = 0;
+  menu.hidden = !candidates.length;
+  toggle?.setAttribute("aria-expanded", String(candidates.length > 0));
+  menu.innerHTML = candidates.map((member, index) => button("chat-mention", chatModelAvatar(member.name, member.provider) + `<span>${e(member.name)}</span>`, "", "chat-mention-option",
+    `id="chat-mention-option-${index}" data-id="${e(member.modelKey)}" role="option" aria-selected="${index === mentionIndex}" tabindex="-1"`)).join("");
+  if (candidates.length) input.setAttribute("aria-activedescendant", `chat-mention-option-${mentionIndex}`);
+  else input.removeAttribute("aria-activedescendant");
+}
+function setMention(key) {
+  const session = chatSession();
+  const input = document.querySelector(".chat-input textarea");
+  if (!input || chatSetup(session).mode === "single") return;
+  if (key && !chatMembers(session).some(member => member.ready && member.modelKey === key)) throw new Error("该成员已不可用。");
+  const draftKey = input.form.dataset.draft;
+  const fragment = mentionFragment(input);
+  const start = input.selectionStart;
+  const caret = key && fragment !== undefined ? start - fragment.length - 1 : start;
+  if (key && fragment !== undefined) input.value = input.value.slice(0, caret) + input.value.slice(start);
+  if (key) chatMentions.set(draftKey, key);
+  else chatMentions.delete(draftKey);
+  setChatPanel("", false);
+  render();
+  const updated = document.querySelector("#message-input");
+  updated.focus({ preventScroll: true });
+  updated.setSelectionRange(caret, caret);
 }
 function settingsPage() {
   const themes = [["light", "浅色"], ["dark", "深色"], ["system", "系统"]];
@@ -899,6 +1337,7 @@ function render() {
   const previousTop = previousMessages?.scrollTop;
   const wasReading = previousMessages && previousMessages.scrollHeight - previousMessages.clientHeight - previousTop > 24;
   const textarea = document.querySelector("#message-input");
+  const caret = textarea && textarea === document.activeElement ? [textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection] : null;
   if (textarea) drafts.set(textarea.form.dataset.draft, textarea.value);
   const { page } = route();
   applyTheme();
@@ -913,13 +1352,18 @@ function render() {
     )
     .join(
       "",
-    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置</span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航" tabindex="-1"></button><div class="workspace"><header class="topbar">${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle", 'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span class="mobile-page-name">${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a></div></header><main class="main" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
+    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置</span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航" tabindex="-1"></button><div class="workspace"><header class="topbar">${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle", 'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span class="mobile-page-name">${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a></div></header><main class="main${page === "chat" ? " main-chat" : ""}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
   if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
   const messages = document.querySelector("#messages");
   if (messages) {
     const sameConversation = messages.dataset.sessionId === previousMessages?.dataset.sessionId;
     messages.scrollTop = sameConversation && wasReading ? previousTop : messages.scrollHeight;
+  }
+  const freshInput = document.querySelector("#message-input");
+  if (caret && freshInput?.form.dataset.draft === textarea.form.dataset.draft) {
+    freshInput.focus({ preventScroll: true });
+    freshInput.setSelectionRange(...caret);
   }
   if (focusNewConversation && page === "chat" && !route().id) {
     focusNewConversation = false;
@@ -1148,6 +1592,10 @@ async function handleAction(target) {
       break;
     case "new-chat":
       pendingType = "AI 对话";
+      newChatSetup = emptyChatSetup;
+      chatMentions.delete("new");
+      chatQuery = "";
+      chatPanel = "";
       drafts.set("new", "");
       if (
         document.querySelector("#message-input")?.form.dataset.draft === "new"
@@ -1155,6 +1603,42 @@ async function handleAction(target) {
         document.querySelector("#message-input").value = "";
       focusNewConversation = true;
       go("chat");
+      break;
+    case "chat-mode": {
+      const setup = chatSetup(session);
+      if (!Object.hasOwn(CHAT_MODES, id) || setup.mode === id) break;
+      saveChatSetup(session, { ...setup, mode: id });
+      render();
+      document.querySelector(`[data-action="chat-mode"][data-id="${id}"]`)?.focus();
+      if (id !== "single" && !setup.members.length && (modelConfig.models?.length || modelConfigPending)) await showChatTeam();
+      break;
+    }
+    case "chat-team":
+      await showChatTeam();
+      break;
+    case "chat-open-panel":
+      setChatPanel(id);
+      break;
+    case "chat-close-panel":
+      setChatPanel("");
+      break;
+    case "chat-open-mention": {
+      const input = document.querySelector("#message-input");
+      input.focus();
+      updateMentionMenu(document.querySelector("#chat-mention-menu").hidden ? mentionFragment(input) ?? "" : undefined);
+      break;
+    }
+    case "chat-mention":
+      setMention(id);
+      break;
+    case "chat-clear-mention":
+      setMention("");
+      break;
+    case "chat-resume-plan":
+    case "chat-retry-step":
+      if (chatPending || latestChatTask(session)?.id !== id) throw new Error("请先完成当前回复。");
+      if (action === "chat-retry-step") mutate(next => retryChatPlanStep(next, id, Number(target.dataset.step)));
+      await performChatPlan(id);
       break;
     case "new-todo":
       todoEditor();
@@ -1211,6 +1695,8 @@ async function handleAction(target) {
       if (!connection || !pluginReady(connection)) throw new Error("请先连接并启用此插件。");
       if (selectedPluginIds.size >= 4 && !selectedPluginIds.has(id)) throw new Error("最多同时选择 4 个对话插件。");
       selectedPluginIds.add(id);
+      newChatSetup = { ...newChatSetup, mode: "single" };
+      chatMentions.delete("new");
       focusNewConversation = true;
       go("chat");
       break;
@@ -1338,6 +1824,7 @@ async function handleAction(target) {
         () => {
           mutate((next) => removeSession(next, id));
           drafts.delete(id);
+          chatMentions.delete(id);
           go("chat");
           toast("会话已删除");
         },
@@ -1355,7 +1842,10 @@ async function handleAction(target) {
     }
     case "regenerate": {
       if (chatPending || !session) throw new Error('请等待当前回复完成。');
+      const latest = latestChatTask(session);
+      if (latest?.chatPlan && latest.status === "pending") throw new Error("请先恢复本轮回复，或发送新的消息。");
       const index = session.messages.findIndex(message => message.id === id && message.role === 'assistant');
+      if (index < 0 || session.messages[index].author) break;
       const user = session.messages.slice(0, index).findLast(message => message.role === 'user');
       if (!user) break;
       const taskId = mutate(next => {
@@ -1419,17 +1909,24 @@ async function handleAction(target) {
       const docs = state.documents.filter((d) => d.kind === "text");
       openDialog(
         "添加背景资料",
-        `<div class="dialog-body"><p>选择一份文本资料，内容将加入新对话输入框。较长资料请先复制需要的段落。</p>${docs.length ? docs.map((d) => button("attach-document", e(d.name), "file", "search-result", `data-id="${d.id}"`)).join("") : empty("folder", "还没有可用的文本资料", "先在知识库添加 TXT、Markdown、CSV 或 JSON。", button("new-document", "前往知识库", "arrow", "btn"))}</div>`,
+        `<div class="dialog-body">${docs.length ? docs.map((d) => button("attach-document", e(d.name), "file", "search-result", `data-id="${e(d.id)}" ${route().page === "chat" ? "data-current-chat" : ""}`)).join("") : empty("folder", "还没有可用的文本资料", "先在知识库添加 TXT、Markdown、CSV 或 JSON。", button("new-document", "前往知识库", "arrow", "btn"))}</div>`,
       );
       break;
     }
     case "attach-document": {
       const d = state.documents.find((d) => d.id === id && d.kind === "text");
       if (!d) break;
-      const text = `请根据以下资料回答我的问题。\n问题：\n\n资料：${d.name}\n${d.content}`;
+      const input = target.hasAttribute("data-current-chat") ? document.querySelector(".chat-input textarea") : null;
+      const text = input?.value.trim() ? `${input.value}\n\n资料：${d.name}\n${d.content}` : `请根据以下资料回答我的问题。\n问题：\n\n资料：${d.name}\n${d.content}`;
       if (text.length > 20000)
         throw new Error("资料文本超过对话长度限制，请在预览中复制需要的段落。");
       closeDialog();
+      if (input) {
+        input.value = text;
+        drafts.set(input.form.dataset.draft, text);
+        input.focus();
+        return;
+      }
       draftChat(text, "资料讨论");
       toast("资料文本已带入新对话，未发送给模型");
       break;
@@ -1510,6 +2007,8 @@ async function handleAction(target) {
 
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
+  if (!event.target.closest("#chat-mention-menu, #message-input, [data-action='chat-open-mention']")) updateMentionMenu(undefined);
+  if (event.target.closest(".chat-session-list a") && chatPanel) setChatPanel("", false);
   document.querySelectorAll(".row-actions[open]").forEach(menu => {
     if (menu.contains(event.target) && !target) return;
     menu.open = false;
@@ -1520,7 +2019,7 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!["message-form", "prompt-form", "tag-form", "todo-form", "plugin-connect-form", "plugin-tools-form", "plugin-picker-form", "plugin-call-form"].includes(form.id)) return;
+  if (!["message-form", "chat-team-form", "prompt-form", "tag-form", "todo-form", "plugin-connect-form", "plugin-tools-form", "plugin-picker-form", "plugin-call-form"].includes(form.id)) return;
   event.preventDefault();
   const data = new FormData(form);
   try {
@@ -1528,6 +2027,15 @@ document.addEventListener("submit", async (event) => {
       await handlePluginForm(form, data);
     } else if (form.id === "message-form") {
       sendChat(String(data.get('message')), form.dataset.draft).catch(error => toast(error.message, true));
+    } else if (form.id === "chat-team-form") {
+      const members = data.getAll("members").map(modelKey => ({ modelKey, role: data.get(`role-${modelKey}`) }));
+      const previousLead = chatSetup().leadKey;
+      const leadKey = data.get("lead") || (members.some(member => member.modelKey === previousLead) ? previousLead : members[0]?.modelKey || "");
+      saveChatSetup(chatSession(), { mode: form.dataset.mode, members, leadKey });
+      closeDialog();
+      render();
+      if (chatPanel === "members") document.querySelector(".chat-members-close")?.focus();
+      else document.querySelector('#message-input')?.focus({ preventScroll: true });
     } else if (form.id === "todo-form") {
       mutate(next => saveTodo(next, form.dataset.id, { title: String(data.get("title")), notes: String(data.get("notes")) }));
       todoFilter = "全部";
@@ -1592,17 +2100,24 @@ document.addEventListener("input", (event) => {
     historyQuery = value;
     document.querySelector("#history-results").innerHTML = historyResults();
   }
+  if (id === "chat-search") {
+    chatQuery = value;
+    document.querySelector("#chat-session-list").innerHTML = chatConversationRows(chatSession());
+  }
   if (id === "todo-search") {
     todoQuery = value;
     document.querySelector("#todo-results").innerHTML = todoResults();
   }
   if (id === "global-search") updateSearch(value);
-  if (id === "message-input")
+  if (id === "message-input") {
     drafts.set(event.target.form.dataset.draft, value);
+    if (!event.isComposing) updateMentionMenu(mentionFragment(event.target));
+  }
 });
 document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
+    if (target.name === "members" && target.form?.id === "chat-team-form") syncChatTeamForm(target.form);
     if (target.id === "plugin-auth-mode") {
       const token = document.querySelector('#plugin-connect-form [name="token"]');
       token.required = target.value === "bearer";
@@ -1678,14 +2193,55 @@ document.addEventListener("keydown", (event) => {
     event.preventDefault();
     if (!dialog.open) showSearch();
   }
+  const mentionMenu = document.querySelector("#chat-mention-menu:not([hidden])");
+  if (mentionMenu && !event.isComposing && event.keyCode !== 229) {
+    const choices = [...mentionMenu.querySelectorAll(".chat-mention-option")];
+    if (event.key === "Escape") {
+      event.preventDefault();
+      updateMentionMenu(undefined);
+      return;
+    }
+    if (event.target.id === "message-input" && ["ArrowDown", "ArrowUp"].includes(event.key)) {
+      event.preventDefault();
+      choices[mentionIndex].setAttribute("aria-selected", "false");
+      mentionIndex = (mentionIndex + (event.key === "ArrowDown" ? 1 : choices.length - 1)) % choices.length;
+      const highlighted = choices[mentionIndex];
+      highlighted.setAttribute("aria-selected", "true");
+      highlighted.scrollIntoView({ block: "nearest" });
+      event.target.setAttribute("aria-activedescendant", highlighted.id);
+      return;
+    }
+    if (event.target.id === "message-input" && event.key === "Enter" && !event.shiftKey) {
+      event.preventDefault();
+      choices[mentionIndex].click();
+      return;
+    }
+  }
   if (
     event.key === "Enter" &&
     !event.shiftKey &&
     !event.isComposing &&
+    event.keyCode !== 229 &&
     event.target.id === "message-input"
   ) {
     event.preventDefault();
-    event.target.form.requestSubmit();
+    if (!event.target.form.querySelector('button[type="submit"]').disabled) event.target.form.requestSubmit();
+  }
+  if (chatPanel && !dialog.open && document.querySelector(".chat-panel-scrim")?.getClientRects().length) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      setChatPanel("");
+      return;
+    }
+    if (event.key === "Tab") {
+      const drawer = document.querySelector(chatPanel === "members" ? "#chat-members-panel" : "#chat-session-panel");
+      const controls = [...drawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled)')].filter(control => control.getClientRects().length);
+      const first = controls[0], last = controls.at(-1);
+      if (!drawer.contains(document.activeElement) || document.activeElement === (event.shiftKey ? first : last)) {
+        event.preventDefault();
+        (event.shiftKey ? last : first)?.focus();
+      }
+    }
   }
   if (
     event.key === "Escape" &&
@@ -1740,6 +2296,7 @@ dialog.addEventListener("click", (event) => {
 });
 window.addEventListener("hashchange", () => {
   if (dialog.open) closeDialog();
+  chatPanel = "";
   render();
   document.querySelector("#page-title")?.focus({ preventScroll: true });
 });
@@ -1753,13 +2310,16 @@ function clearAccountView() {
   pluginConnections = []; pluginHistory = []; pluginError = ""; pluginsLoaded = false; pluginLoading = false; pluginChecked = 0; pluginViewDirty = false;
   selectedPluginIds.clear(); pluginDetailsCache.clear(); pluginApprovals.clear();
   focusNewConversation = false;
-  modelConfigPending = false;
+  modelConfigPending = null;
   modelConfigChecked = 0;
   modelConfig = { ready: false, model: '', provider: '', message: '请登录后查看模型配置。' };
   if (dialog.open) closeDialog();
   dialog.innerHTML = "";
   state = createInitialState();
   drafts.clear();
+  chatMentions.clear();
+  newChatSetup = emptyChatSetup;
+  chatQuery = chatPanel = "";
   promptFilter = documentFilter = "全部";
   promptQuery = documentQuery = historyQuery = todoQuery = "";
   todoFilter = "全部";
