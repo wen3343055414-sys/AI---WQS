@@ -77,7 +77,7 @@ try {
   await page.getByRole('heading', { name: '信息收集与分析', exact: true }).waitFor();
   await list.getByRole('link', { name: '开放模型发布新的本地推理工具' }).waitFor();
   assert.equal(await list.locator('.intel-story').count(), 6);
-  assert.equal(await page.locator('#sidebar a[href="#home"]').innerText(), '信息收集与分析');
+  assert.equal(await page.locator('#sidebar nav a[href="#home"]').innerText(), '信息收集与分析');
   await picture('overview-desktop');
 
   await page.getByRole('button', { name: '政策与采购', exact: true }).click();

@@ -135,7 +135,7 @@ try {
     assert.equal(await page.locator('.topbar [data-action="new"]').count(), 0);
     assert.equal(await page.locator('.topbar [data-action="new-chat"]').count(), 0);
     assert.equal(await page.locator('#sidebar a[href="#tasks"]').innerText(), "历史对话");
-    assert.equal(await page.locator('#sidebar a[href="#home"]').innerText(), "信息收集与分析");
+    assert.equal(await page.locator('#sidebar nav a[href="#home"]').innerText(), "信息收集与分析");
     assert.ok(await page.locator("#sidebar").evaluate(element => {
       const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
       const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
