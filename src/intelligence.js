@@ -115,7 +115,7 @@ export class Intelligence {
     const label = text(name, 60) || address.hostname;
     const existing = this.db.prepare('SELECT * FROM intel_sources WHERE (user_id IS NULL OR user_id=?) AND url=?').get(userId, address.href);
     if (existing && !existing.archived) throw fault(409, 'intel_source_exists', '该信源已添加，可在信源列表中启用。');
-    if (this.db.prepare('SELECT COUNT(*) AS n FROM intel_sources WHERE user_id=?').get(userId).n >= 30 && !existing)
+    if (this.db.prepare('SELECT COUNT(*) AS n FROM intel_sources WHERE user_id=? AND archived=0').get(userId).n >= 30)
       throw fault(400, 'intel_source_limit', '每个账号最多可添加 30 个自定义信源。');
     const id = existing?.id || 'feed_' + randomUUID().replaceAll('-', '');
     this.store.transaction(() => {
