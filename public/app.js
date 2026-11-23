@@ -31,12 +31,20 @@ import {
   removeTodo,
 } from "./core.js";
 import { WorkspaceSync } from "./sync.js";
+import { IntelligenceView } from "./intel.js";
 
 const paths = {
   spark:
     '<path d="m14 3 2.5 6.5L23 12l-6.5 2.5L14 21l-2.5-6.5L5 12l6.5-2.5L14 3Z"/><path d="m4 2 .8 2.2L7 5l-2.2.8L4 8l-.8-2.2L1 5l2.2-.8L4 2Z"/>',
   puzzle: '<path d="M8 3H3v5a3 3 0 1 1 0 6v7h7a3 3 0 1 1 6 0h5v-7a3 3 0 1 0 0-6V3h-7a3 3 0 1 1-6 0Z"/>',
-  home: '<path d="m3 10 9-7 9 7v10a1 1 0 0 1-1 1h-5v-7H9v7H4a1 1 0 0 1-1-1Z"/>',
+  globe: '<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18 15 15 0 0 1 0-18Z"/>',
+  rss: '<path d="M4 12a8 8 0 0 1 8 8M4 5a15 15 0 0 1 15 15"/><circle cx="5" cy="19" r="1.2"/>',
+  bell: '<path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/>',
+  bookmark: '<path d="M6 4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17l-6-4-6 4Z"/>',
+  external: '<path d="M13 4h7v7m0-7-9 9M19 13v6H5V5h6"/>',
+  "square-plus": '<rect x="4" y="4" width="16" height="16" rx="3"/><path d="M12 8v8m-4-4h8"/>',
+  toggle: '<rect x="3" y="7" width="18" height="10" rx="5"/><circle cx="15.8" cy="12" r="2.1"/>',
+  monitor: '<rect x="3" y="4" width="18" height="13" rx="2"/><path d="M9 21h6m-3-4v4"/>',
   chat: '<path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5H4l-2 2V11.5a9.5 9.5 0 0 1 19 0Z"/><path d="M7 9h9M7 13h6"/>',
   layers: '<path d="m12 3 10 5-10 5L2 8l10-5ZM2 12l10 5 10-5M2 16l10 5 10-5"/>',
   book: '<path d="M12 5C8 2 5 3 2 4v15c3-1 6-2 10 1 4-3 7-2 10-1V4c-3-1-6-2-10 1v15"/>',
@@ -105,7 +113,7 @@ function rowActions(label, ...actions) {
 }
 const nav = [
   ["todo", "任务", "list"],
-  ["home", "首页", "home"],
+  ["home", "信息收集与分析", "globe"],
   ["chat", "AI 对话", "chat"],
   ["prompts", "提示词库", "layers"],
   ["knowledge", "知识库", "book"],
@@ -146,6 +154,8 @@ let dialogOrigin;
 let uploadQueue = Promise.resolve();
 const dialog = document.querySelector("#dialog");
 const app = document.querySelector("#app");
+const intel = new IntelligenceView({ getSync: () => sync, getModelReady: () => activeModel().ready || modelConfig.ready,
+  icon, toast, openDialog, closeDialog, copy, download });
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
 const mobile = matchMedia("(max-width: 820px)");
 const macShortcuts = /Mac|iPhone|iPad|iPod/.test(navigator.userAgentData?.platform || navigator.platform);
@@ -223,6 +233,7 @@ function refreshModelConfig(force = false) {
           roster.innerHTML = chatMemberRows(chatSession());
           if (focusedClose) roster.querySelector(".chat-members-close")?.focus();
         }
+        intel.update();
       }
       syncComposerState();
     } finally {
@@ -438,25 +449,6 @@ function composerModelControls() {
     <select class="model-select" aria-label="选择助手" data-setting="model">${modelOptions()}</select>
     <select class="model-select ai-model-select" aria-label="选择 AI 模型" data-setting="modelKey">${aiModelOptions()}</select>`;
 }
-function composer() {
-  const key = "home";
-  const model = activeModel();
-  return `<form class="composer" id="message-form" data-draft="${e(key)}">
-    <label class="visually-hidden" for="message-input">输入消息</label>
-    <textarea id="message-input" name="message" maxlength="20000" required placeholder="输入消息…">${e(drafts.get(key) || "")}</textarea>
-    <div class="composer-bottom">
-      <div class="composer-controls">
-        ${iconButton("attach", "从知识库添加文本", "clip")}
-        ${composerModelControls()}
-      </div>
-      <div class="composer-submit">
-        ${iconButton("data-use", "查看消息如何处理", "shield")}
-        <button type="submit" class="btn btn-primary" ${chatPending || !model.ready ? "disabled" : ""}>${chatPending ? "等待回复…" : "发送"}${icon("arrow")}</button>
-      </div>
-    </div>
-    <div class="composer-problem" data-model-problem ${model.ready ? "hidden" : ""} role="status"><span data-model-summary>${e(model.message)}</span> <a href="#settings">查看连接</a></div>
-  </form>`;
-}
 function chatComposerProblem(setup, mentionKey, model = activeModel()) {
   if (setup.mode === "single") return model.ready ? null : { text: model.message, action: "settings" };
   const models = modelConfig.models || [];
@@ -552,41 +544,6 @@ function conversationList(sessions, filtered = false) {
       <span class="conversation-chevron">${icon("chevron")}</span>
     </a></li>`;
   }).join("")}</ul>`;
-}
-function starterButtons() {
-  return `<div class="starter-buttons" role="group" aria-label="对话快捷方式">${STARTERS.map(starter =>
-    button("starter", e(starter.title), starter.icon, "btn starter-button", `data-id="${starter.id}"`),
-  ).join("")}</div>`;
-}
-function favoriteRow(prompt) {
-  const [tone, symbol] = categoryStyle[prompt.category] || ["purple", "file"];
-  const target = `data-id="${e(prompt.id)}"`;
-  return `<article class="favorite-row">
-    <span class="tile-icon tone-${tone}">${icon(symbol)}</span>
-    <span class="favorite-row-copy"><strong>${e(prompt.title)}</strong>${prompt.description ? `<small>${e(prompt.description)}</small>` : ""}</span>
-    ${button("use-prompt", "使用", "arrow", "btn btn-tinted", `${target} aria-label="使用提示词：${e(prompt.title)}"`)}
-    ${rowActions("提示词操作：" + prompt.title,
-      button("view-prompt", "编辑", "pen", "btn btn-quiet", target),
-      button("favorite", "取消收藏", "star", "btn btn-quiet", target))}
-  </article>`;
-}
-function homePage() {
-  const favorites = state.prompts.filter(prompt => prompt.favorite).slice(0, 3);
-  return `<div class="home-hub">
-    ${heading("开始对话")}
-    ${composer()}
-    ${starterButtons()}
-  </div>
-  <div class="home-collections">
-    <section>
-      ${section("收藏提示词", '<a class="btn btn-quiet" href="#prompts">提示词库 ' + icon("arrow") + "</a>")}
-      ${favorites.length ? `<div class="home-favorites">${favorites.map(favoriteRow).join("")}</div>` : empty("star", "暂无收藏", "")}
-    </section>
-    <section>
-      ${section("最近对话", '<a class="btn btn-quiet" href="#tasks">全部对话 ' + icon("arrow") + "</a>")}
-      ${conversationList(sortedConversations().slice(0, 4))}
-    </section>
-  </div>`;
 }
 function promptResults() {
   const list = state.prompts.filter(
@@ -1364,7 +1321,7 @@ function sidebarMarkup(page) {
         ${railLink(nav.at(-1), page)}
       </nav>
       <aside class="conversation-sidebar" id="sidebar" aria-label="对话侧栏">
-        <a class="sidebar-brand" href="#home" aria-label="智作台首页" data-sidebar-focus="brand"><span class="brand-mark">${icon("spark")}</span><strong>智作台</strong></a>
+        <a class="sidebar-brand" href="#home" aria-label="智作台 · 信息收集与分析" data-sidebar-focus="brand"><span class="brand-mark">${icon("spark")}</span><strong>智作台</strong></a>
         ${button("new-chat", "新对话", "pen", "btn sidebar-new-chat", 'data-sidebar-focus="new"')}
         <label class="sidebar-search">${icon("search")}<input id="sidebar-search" data-sidebar-focus="search" type="search" aria-label="搜索对话" placeholder="搜索对话" maxlength="100" value="${e(sidebarQuery)}" autocomplete="off"></label>
         <div class="sidebar-conversations" id="sidebar-conversations">${sidebarConversations()}</div>
@@ -1418,7 +1375,7 @@ function render() {
           <a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a>
         </div>
       </header>
-      <main class="main${page === "chat" ? " main-chat" : ""}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
+      <main class="main${page === "chat" ? " main-chat" : page === "home" ? " main-intel" : ""}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: () => intel.render(), todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
   if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
   app.querySelector("#sidebar-conversations").scrollTop = sidebarScroll;
@@ -2091,7 +2048,7 @@ async function handleAction(target) {
     case "help":
       openDialog(
         "欢迎使用智作台",
-        `<div class="dialog-body"><ol class="help-list"><li>从首页快捷操作开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办；在插件中连接外部服务，选择对话工具并确认具体操作。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
+        `<div class="dialog-body"><ol class="help-list"><li>从新对话开始，或在提示词库选择一个模板。</li><li>发送后调用服务端配置的模型，保存真实回答和任务结果。</li><li>支持多轮会话、重新生成、复制和导出。Token 用量可在服务端总览查看。</li><li>在任务中记录待办；在插件中连接外部服务，选择对话工具并确认具体操作。</li><li>使用 Ctrl / ⌘ + K 搜索，按 Esc 关闭弹窗。</li></ol>${notice("会话由本机数据库保存。发送的消息和所选文本会交给配置的模型服务处理。")}</div>`,
       );
       break;
   }
@@ -2404,6 +2361,7 @@ mobile.addEventListener("change", () => setMenu(false, false));
 render();
 if (initial.warning) toast(initial.warning, true);
 function clearAccountView() {
+  intel.clear();
   chatAccountCycle++;
   chatPending = null;
   pluginConnections = []; pluginHistory = []; pluginError = ""; pluginsLoaded = false; pluginLoading = false; pluginChecked = 0; pluginViewDirty = false;
@@ -2436,7 +2394,7 @@ sync = new WorkspaceSync({
   },
   onNotice: toast,
   canChangeAccount: action => !dialog.open && ![...drafts.values()].some(value => value.trim()) && (action !== "add-account" || !chatPending),
-  onStatus() { refreshModelConfig(); refreshPlugins(); },
+  onStatus() { refreshModelConfig(); refreshPlugins(); intel.mount(); },
   canApply: () => !chatPending && !dialog.open && !document.activeElement?.matches("input, textarea, select"),
   canReload: () => !chatPending && !dialog.open && ![...drafts.values()].some(value => value.trim()) && !document.activeElement?.matches("input, textarea, select"),
   onVersion(version) {

@@ -11,6 +11,8 @@ for (const name of [
   "sync.js",
   "auth.js",
   "auth.css",
+  "intel.js",
+  "intel.css",
   "favicon.svg",
 ]) {
   await cp(

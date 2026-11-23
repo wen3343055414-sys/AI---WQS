@@ -84,6 +84,8 @@ jobs:
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/plugins-ui-check.mjs
       - name: Verify management pages and responsive navigation
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/admin-ui-check.mjs
+      - name: Verify intelligence collection and dashboard flows
+        run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/intel-ui-check.mjs
       - name: Save interface previews
         if: always()
         uses: actions/upload-artifact@v4
