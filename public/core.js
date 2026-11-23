@@ -221,6 +221,7 @@ export function validateState(value) {
         isText(s.title, 80) &&
         isTime(s.createdAt) &&
         isTime(s.updatedAt) &&
+        (s.pinned === undefined || typeof s.pinned === "boolean") &&
         (s.chatSetup === undefined || validateChatSetup(s.chatSetup)) &&
         Array.isArray(s.messages) &&
         s.messages.length <= 2000 &&

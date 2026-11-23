@@ -45,6 +45,7 @@ const paths = {
     '<path d="m9 3-1 3-3 1-2 4 2 3v4l4 2 3-1 3 1 4-2v-4l2-3-2-4-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
+  pin: '<path d="m14 3 7 7-3 1-3 3-1 4-8-8 4-1 3-3 1-3ZM10 14l-6 6"/>',
   arrow: '<path d="M4 12h16m-6-6 6 6-6 6"/>',
   chevron: '<path d="m9 5 7 7-7 7"/>',
   down: '<path d="m6 9 6 6 6-6"/>',
@@ -137,7 +138,7 @@ const selectedPluginIds = new Set(), pluginDetailsCache = new Map(), pluginAppro
 const drafts = new Map();
 const chatMentions = new Map();
 const emptyChatSetup = { mode: "single", members: [], leadKey: "" };
-let newChatSetup = emptyChatSetup, chatQuery = "", chatPanel = "", mentionIndex = 0;
+let newChatSetup = emptyChatSetup, sidebarQuery = "", chatPanel = "", mentionIndex = 0;
 let pendingType = "AI 对话";
 let focusNewConversation = false;
 let toastTimer;
@@ -146,7 +147,8 @@ let uploadQueue = Promise.resolve();
 const dialog = document.querySelector("#dialog");
 const app = document.querySelector("#app");
 const systemTheme = matchMedia("(prefers-color-scheme: dark)");
-const mobile = matchMedia("(max-width: 760px)");
+const mobile = matchMedia("(max-width: 820px)");
+const macShortcuts = /Mac|iPhone|iPad|iPod/.test(navigator.userAgentData?.platform || navigator.platform);
 const SIDEBAR_VIEW_KEY = "zhizuotai.sidebar.collapsed.v1";
 let sidebarCollapsed = false;
 try { sidebarCollapsed = localStorage.getItem(SIDEBAR_VIEW_KEY) === "true"; } catch { /* Layout remains usable when storage is unavailable. */ }
@@ -973,7 +975,6 @@ function historyPage() {
 const chatModeIcon = { single: "chat", group: "users", collaborate: "workflow" };
 const chatClock = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Shanghai" });
 const chatDay = new Intl.DateTimeFormat("zh-CN", { dateStyle: "medium", timeZone: "Asia/Shanghai" });
-const chatShortDate = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", timeZone: "Asia/Shanghai" });
 
 function chatSession() {
   return state.sessions.find(session => session.id === route().id);
@@ -1024,24 +1025,6 @@ function chatModelAvatar(name = "", provider = "") {
     [color, shape] = options[code % options.length];
   }
   return `<span class="chat-model-avatar model-${color}" aria-hidden="true">${icon(shape)}</span>`;
-}
-function chatConversationRows(session) {
-  const sessions = sortedConversations(chatQuery);
-  const draft = !session && !chatQuery.trim() ? [{ id: "", title: "新对话", chatSetup: newChatSetup }] : [];
-  const today = chatDay.format(new Date());
-  const rows = [...draft, ...sessions].map(item => {
-    const active = (session?.id || "") === item.id;
-    const mode = item.chatSetup?.mode || "single";
-    const last = item.messages?.at(-1);
-    const preview = last?.demo ? item.messages.findLast(message => message.role === "user") : last;
-    const excerpt = preview?.content.replace(/^#+\s+/, "").replace(/\s+/g, " ").trim();
-    const date = item.updatedAt && new Date(item.updatedAt);
-    return `<a class="session-link${active ? " active" : ""}" href="#chat${item.id ? `/${e(item.id)}` : ""}" ${active ? 'aria-current="page"' : ""} title="${e(item.title)}">
-      <span class="chat-session-icon mode-${mode}">${icon(chatModeIcon[mode])}</span><span class="chat-session-copy"><strong>${e(item.title)}</strong>
-      ${excerpt && excerpt !== item.title ? `<small>${e((preview.author ? `${preview.author.name} · ` : "") + excerpt.slice(0, 95))}</small>` : ""}</span>
-      ${date ? `<time datetime="${e(item.updatedAt)}">${chatDay.format(date) === today ? chatClock.format(date) : chatShortDate.format(date)}</time>` : ""}</a>`;
-  }).join("");
-  return rows || '<p class="chat-list-empty">没有匹配的会话</p>';
 }
 function chatStepState(task, step, index) {
   if (chatPending?.taskId === task.id && chatPending.steps?.has(index)) return ["working", "回复中", '<span class="chat-step-spinner"></span>'];
@@ -1130,16 +1113,14 @@ function chatPage() {
   const modeSwitch = Object.entries(CHAT_MODES).map(([key, label]) =>
     button("chat-mode", label, chatModeIcon[key], "chat-mode-button", `data-id="${key}" aria-pressed="${mode === key}"`)).join("");
   return `<div class="chat-layout" data-panel="${chatPanel}">
-    <aside class="chat-sidebar" id="chat-session-panel" aria-label="会话"><div class="chat-panel-title"><h2>会话</h2><div>${iconButton("new-chat", "新对话", "plus")}
-      ${button("chat-close-panel", "", "close", "icon-button chat-sessions-close", 'aria-label="关闭会话列表" title="关闭会话列表"')}</div></div>
-      ${searchField("chat-search", "搜索会话", chatQuery)}<div class="chat-session-list" id="chat-session-list">${chatConversationRows(session)}</div></aside>
     <section class="chat-main" aria-label="AI 对话"><header class="chat-header">
-      <div class="chat-identity">${button("chat-open-panel", "", "sidebar-open", "icon-button chat-sessions-toggle", `data-id="sessions" aria-label="会话列表" title="会话列表" aria-controls="chat-session-panel" aria-expanded="${chatPanel === "sessions"}"`)}
+      <div class="chat-identity">
         <span class="chat-room-icon mode-${mode}">${icon(chatModeIcon[mode])}</span><div class="chat-room-copy"><h1 tabindex="-1" id="page-title" title="${e(session?.title || "新对话")}">${e(session?.title || "新对话")}</h1>
         ${mode !== "single" && members.length ? `<span>${members.length} 个模型</span>` : ""}</div></div>
       <div class="chat-mode-switch" role="group" aria-label="对话模式">${modeSwitch}</div>
       <div class="chat-header-tools">${button("chat-open-panel", "", "users", "icon-button chat-members-toggle", `data-id="members" aria-label="成员" title="成员" aria-controls="chat-members-panel" aria-expanded="${chatPanel === "members"}"`)}
       ${session ? rowActions("会话操作", button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
+        button("pin-session", session.pinned ? "取消置顶" : "置顶会话", "pin", "btn btn-quiet", `data-id="${e(session.id)}"`),
         button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div>
     </header><div class="messages${session?.messages.length ? "" : " chat-messages-empty"}" id="messages" data-session-id="${e(session?.id || "")}" aria-label="消息记录"><div class="chat-transcript">
       <div id="chat-message-list" data-count="${session?.messages.length || 0}">${chatTranscript(session)}</div><div id="chat-request-status">${chatRequestNotice(session)}</div></div></div>
@@ -1157,7 +1138,7 @@ function refreshChatActivity(sessionId) {
     if (session.messages.length !== Number(list.dataset.count)) {
       list.innerHTML = chatTranscript(session);
       list.dataset.count = session.messages.length;
-      document.querySelector("#chat-session-list").innerHTML = chatConversationRows(session);
+      refreshSidebarConversations();
     }
     document.querySelector("#chat-request-status").innerHTML = chatRequestNotice(session);
     if (atEnd) messages.scrollTop = messages.scrollHeight;
@@ -1331,6 +1312,82 @@ function serverSettings() {
     </details>
   </section>`;
 }
+function railLink([id, label, name], page) {
+  return `<a class="rail-link${page === id ? " is-current" : ""}" href="#${id}" title="${label}"
+    data-sidebar-focus="rail:${id}" ${page === id ? 'aria-current="page"' : ""}>${icon(name)}<span>${label}</span></a>`;
+}
+
+function sidebarConversations() {
+  const filter = sidebarQuery.trim();
+  const { page, id } = route();
+  const conversations = sortedConversations(sidebarQuery);
+  if (!conversations.length) return `<p class="sidebar-empty" role="status">${filter ? "没有匹配的对话" : "暂无对话"}</p>`;
+
+  const rows = (label, sessions, showAll = false) => sessions.length ? `<section class="sidebar-group">
+    <div class="sidebar-group-heading"><h2>${label}</h2>${showAll ?
+      '<a href="#tasks" aria-label="查看全部历史对话" data-sidebar-focus="history">全部</a>' : ""}</div>
+    <ul>${sessions.map(session => {
+      const selected = page === "chat" && id === session.id;
+      const mode = session.chatSetup?.mode || "single";
+      const pinLabel = session.pinned ? "取消置顶" : "置顶";
+      return `<li class="sidebar-session${selected ? " is-current" : ""}">
+        <a href="#chat/${e(session.id)}" title="${e(session.title)}" data-sidebar-focus="session:${e(session.id)}" ${selected ? 'aria-current="page"' : ""}>
+          ${icon(chatModeIcon[mode])}<span>${e(session.title)}</span>
+        </a>
+        ${button("pin-session", "", "pin", "sidebar-pin", `data-id="${e(session.id)}" data-sidebar-focus="pin:${e(session.id)}"
+          aria-label="${pinLabel}：${e(session.title)}" aria-pressed="${Boolean(session.pinned)}" title="${pinLabel}"`)}
+      </li>`;
+    }).join("")}</ul></section>` : "";
+  const pinned = conversations.filter(session => session.pinned);
+  const recent = conversations.filter(session => !session.pinned);
+  const limit = 12;
+  return rows("置顶", pinned) + rows(filter ? "搜索结果" : "最近", filter ? recent : recent.slice(0, limit), !filter && recent.length > limit);
+}
+
+function sidebarMarkup(page) {
+  const shortcut = macShortcuts ? "⌘ ⇧ S" : "Ctrl + Shift + S";
+  return `<div class="sidebar-toggle-wrap">
+      ${button("toggle-sidebar", "", "sidebar-open", "sidebar-toggle", 'aria-label="展开侧边栏" aria-expanded="false" aria-controls="sidebar" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" data-menu-button data-sidebar-focus="toggle"')}
+      <span class="sidebar-tooltip" aria-hidden="true"><span data-sidebar-toggle-label>展开侧边栏</span><kbd>${shortcut}</kbd></span>
+    </div>
+    <div class="sidebar-frame" id="sidebar-frame">
+      <nav class="workspace-rail" id="workspace-rail" aria-label="工作空间导航">
+        <div class="rail-items">
+          ${button("new-chat", "<span>新对话</span>", "plus", "rail-link rail-new", 'title="新对话" data-sidebar-focus="rail:new"')}
+          ${nav.filter(([id]) => id !== "settings").map(entry => railLink(entry, page)).join("")}
+        </div>
+        ${railLink(nav.at(-1), page)}
+      </nav>
+      <aside class="conversation-sidebar" id="sidebar" aria-label="对话侧栏">
+        <a class="sidebar-brand" href="#home" aria-label="智作台首页" data-sidebar-focus="brand"><span class="brand-mark">${icon("spark")}</span><strong>智作台</strong></a>
+        ${button("new-chat", "新对话", "pen", "btn sidebar-new-chat", 'data-sidebar-focus="new"')}
+        <label class="sidebar-search">${icon("search")}<input id="sidebar-search" data-sidebar-focus="search" type="search" aria-label="搜索对话" placeholder="搜索对话" maxlength="100" value="${e(sidebarQuery)}" autocomplete="off"></label>
+        <div class="sidebar-conversations" id="sidebar-conversations">${sidebarConversations()}</div>
+      </aside>
+    </div>
+    <button type="button" class="sidebar-backdrop" data-action="close-menu" aria-label="关闭侧边栏" tabindex="-1"></button>`;
+}
+
+function restoreSidebarFocus(key) {
+  if (!key) return null;
+  const control = app.querySelector(`[data-sidebar-focus="${CSS.escape(key)}"]`);
+  control?.focus({ preventScroll: true });
+  return control;
+}
+
+function refreshSidebarConversations() {
+  const list = app.querySelector("#sidebar-conversations");
+  const focus = document.activeElement?.dataset.sidebarFocus;
+  const scrollTop = list.scrollTop;
+  list.innerHTML = sidebarConversations();
+  list.scrollTop = scrollTop;
+  if (focus === "history" || focus?.startsWith("session:") || focus?.startsWith("pin:")) {
+    const control = restoreSidebarFocus(focus);
+    if (control) control.scrollIntoView({ block: "nearest" });
+    else app.querySelector("#sidebar-search").focus({ preventScroll: true });
+  }
+}
+
 function render() {
   const showCalls = app.querySelector(".plugin-recent")?.open;
   const previousMessages = app.querySelector("#messages");
@@ -1343,18 +1400,25 @@ function render() {
   applyTheme();
   const title = nav.find((n) => n[0] === page)[1];
   document.title = `${title} · 智作台`;
-  document.body.classList.remove("sidebar-open");
-  app.innerHTML = `<div class="app-shell"><aside class="sidebar" id="sidebar" aria-label="主导航"><a class="brand" href="#home" aria-label="智作台首页"><span class="brand-mark">${icon("spark")}</span><span><span class="brand-name">智作台</span></span></a><nav aria-label="工作空间导航">${button("new-chat", "新对话", "plus", "btn btn-primary sidebar-new-chat")}${nav
-    .filter(([id]) => id !== "settings")
-    .map(
-      ([id, label, name]) =>
-        `<a class="nav-link ${page === id ? "active" : ""}" href="#${id}" ${page === id ? 'aria-current="page"' : ""}>${icon(name)}${label}</a>`,
-    )
-    .join(
-      "",
-    )}</nav><div class="sidebar-bottom"><div class="sidebar-settings-wrap"><a href="#settings" class="nav-link sidebar-settings ${page === "settings" ? "active" : ""}" ${page === "settings" ? 'aria-current="page"' : ""}>${icon("settings")}<span>设置</span>${icon("chevron")}</a></div></div></aside><button class="sidebar-backdrop" data-action="close-menu" aria-label="关闭导航" tabindex="-1"></button><div class="workspace"><header class="topbar">${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle", 'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" data-menu-button')}<div class="breadcrumb"><span>工作空间</span><span class="mobile-page-name">${title}</span></div><div class="topbar-tools">${button("search", "<span>搜索</span><kbd>⌘ K</kbd>", "search", "search-trigger", 'aria-label="搜索工作空间"')}<a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a></div></header><main class="main${page === "chat" ? " main-chat" : ""}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
+  const sidebarFocus = document.activeElement?.dataset.sidebarFocus;
+  const sidebarSelection = sidebarFocus === "search" ? [document.activeElement.selectionStart, document.activeElement.selectionEnd] : null;
+  const sidebarScroll = app.querySelector("#sidebar-conversations")?.scrollTop || 0;
+  app.innerHTML = `<div class="app-shell">
+    ${sidebarMarkup(page)}
+    <div class="workspace">
+      <header class="topbar">
+        <div class="breadcrumb"><span>工作空间</span><span class="mobile-page-name">${title}</span></div>
+        <div class="topbar-tools">
+          ${button("search", `<span>搜索</span><kbd>${macShortcuts ? "⌘ K" : "Ctrl K"}</kbd>`, "search", "search-trigger", 'aria-label="搜索工作空间"')}
+          <a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a>
+        </div>
+      </header>
+      <main class="main${page === "chat" ? " main-chat" : ""}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: homePage, todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
   if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
+  app.querySelector("#sidebar-conversations").scrollTop = sidebarScroll;
+  const sidebarControl = restoreSidebarFocus(sidebarFocus);
+  if (sidebarControl && sidebarSelection) sidebarControl.setSelectionRange(...sidebarSelection);
   const messages = document.querySelector("#messages");
   if (messages) {
     const sameConversation = messages.dataset.sessionId === previousMessages?.dataset.sessionId;
@@ -1534,34 +1598,43 @@ async function addFiles(files) {
   else if (count) toast(`已添加 ${count} 份资料`);
 }
 function syncSidebar() {
-  const expanded = mobile.matches ? document.body.classList.contains("sidebar-open") : !sidebarCollapsed;
+  const drawerOpen = mobile.matches && document.body.classList.contains("sidebar-open");
+  const expanded = mobile.matches ? drawerOpen : !sidebarCollapsed;
   document.body.classList.toggle("sidebar-collapsed", !mobile.matches && sidebarCollapsed);
-  const sidebar = document.querySelector("#sidebar");
-  const toggle = document.querySelector("[data-menu-button]");
-  if (!expanded && sidebar.contains(document.activeElement)) toggle.focus();
+  const sidebar = app.querySelector("#sidebar");
+  const frame = app.querySelector("#sidebar-frame");
+  const toggle = app.querySelector("[data-menu-button]");
+  if (!expanded && (mobile.matches ? frame : sidebar).contains(document.activeElement)) toggle.focus();
+  frame.inert = mobile.matches && !drawerOpen;
   sidebar.inert = !expanded;
   sidebar.setAttribute("aria-hidden", String(!expanded));
-  document.querySelector(".workspace").inert = false;
-  document.querySelector(".main").inert = mobile.matches && expanded;
-  document.querySelector(".topbar-tools").inert = mobile.matches && expanded;
+  app.querySelector(".main").inert = drawerOpen;
+  app.querySelector(".topbar-tools").inert = drawerOpen;
   const label = expanded ? "收起侧边栏" : "展开侧边栏";
   toggle.setAttribute("aria-expanded", String(expanded));
   toggle.setAttribute("aria-label", label);
-  toggle.title = label;
-  toggle.innerHTML = icon(expanded ? "sidebar-close" : "sidebar-open") + `<span data-sidebar-toggle-label>${label}</span>`;
+  toggle.setAttribute("aria-controls", mobile.matches ? "sidebar-frame" : "sidebar");
+  toggle.innerHTML = icon(expanded ? "sidebar-close" : "sidebar-open");
+  app.querySelector("[data-sidebar-toggle-label]").textContent = label;
 }
 function setMenu(open, restoreFocus = true) {
+  if (open && mobile.matches) {
+    if (chatPanel) setChatPanel("", false);
+    app.querySelector(".row-actions[open]")?.removeAttribute("open");
+  }
   document.body.classList.toggle("sidebar-open", mobile.matches && open);
   syncSidebar();
-  if (mobile.matches && open) document.querySelector(".sidebar-new-chat").focus();
-  else if (restoreFocus) document.querySelector("[data-menu-button]").focus();
+  if (mobile.matches && open) app.querySelector(".sidebar-new-chat").focus();
+  else if (restoreFocus) app.querySelector("[data-menu-button]").focus();
 }
 function toggleSidebar() {
   if (mobile.matches) setMenu(!document.body.classList.contains("sidebar-open"));
   else {
+    const focusedNewChat = document.activeElement?.matches(".rail-new");
     sidebarCollapsed = !sidebarCollapsed;
     try { localStorage.setItem(SIDEBAR_VIEW_KEY, String(sidebarCollapsed)); } catch { /* Only the saved layout preference is optional. */ }
     syncSidebar();
+    if (!sidebarCollapsed && focusedNewChat) app.querySelector(".sidebar-new-chat").focus();
   }
 }
 
@@ -1590,11 +1663,25 @@ async function handleAction(target) {
     case "search":
       showSearch();
       break;
+    case "pin-session": {
+      if (!state.sessions.some(conversation => conversation.id === id)) break;
+      const pinned = mutate(next => {
+        const item = next.sessions.find(conversation => conversation.id === id);
+        item.pinned = !item.pinned;
+        return item.pinned;
+      });
+      refreshSidebarConversations();
+      const menuItem = app.querySelector('.chat-header [data-action="pin-session"]');
+      if (menuItem?.dataset.id === id) menuItem.lastChild.textContent = pinned ? "取消置顶" : "置顶会话";
+      toast(pinned ? "对话已置顶" : "已取消置顶");
+      break;
+    }
     case "new-chat":
+      if (mobile.matches) setMenu(false, false);
       pendingType = "AI 对话";
       newChatSetup = emptyChatSetup;
       chatMentions.delete("new");
-      chatQuery = "";
+      sidebarQuery = "";
       chatPanel = "";
       drafts.set("new", "");
       if (
@@ -2008,14 +2095,13 @@ async function handleAction(target) {
 document.addEventListener("click", (event) => {
   const target = event.target.closest("[data-action]");
   if (!event.target.closest("#chat-mention-menu, #message-input, [data-action='chat-open-mention']")) updateMentionMenu(undefined);
-  if (event.target.closest(".chat-session-list a") && chatPanel) setChatPanel("", false);
   document.querySelectorAll(".row-actions[open]").forEach(menu => {
     if (menu.contains(event.target) && !target) return;
     menu.open = false;
     if (menu.contains(target)) menu.querySelector("summary").focus();
   });
   if (target) handleAction(target).catch((error) => toast(error.message, true));
-  if (event.target.closest(".sidebar a") && mobile.matches) setMenu(false, false);
+  if (mobile.matches && !event.ctrlKey && !event.metaKey && !event.shiftKey && !event.altKey && event.target.closest("#sidebar-frame a")) setMenu(false, false);
 });
 document.addEventListener("submit", async (event) => {
   const form = event.target;
@@ -2100,9 +2186,10 @@ document.addEventListener("input", (event) => {
     historyQuery = value;
     document.querySelector("#history-results").innerHTML = historyResults();
   }
-  if (id === "chat-search") {
-    chatQuery = value;
-    document.querySelector("#chat-session-list").innerHTML = chatConversationRows(chatSession());
+  if (id === "sidebar-search") {
+    sidebarQuery = value;
+    refreshSidebarConversations();
+    app.querySelector("#sidebar-conversations").scrollTop = 0;
   }
   if (id === "todo-search") {
     todoQuery = value;
@@ -2189,6 +2276,12 @@ document.addEventListener("keydown", (event) => {
     menu.querySelector("summary").focus();
     return;
   }
+  if ((event.metaKey || event.ctrlKey) && event.shiftKey && !event.altKey && !event.isComposing &&
+    event.key.toLowerCase() === "s" && !document.querySelector("dialog[open]")) {
+    event.preventDefault();
+    if (!event.repeat) toggleSidebar();
+    return;
+  }
   if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
     event.preventDefault();
     if (!dialog.open) showSearch();
@@ -2234,7 +2327,7 @@ document.addEventListener("keydown", (event) => {
       return;
     }
     if (event.key === "Tab") {
-      const drawer = document.querySelector(chatPanel === "members" ? "#chat-members-panel" : "#chat-session-panel");
+      const drawer = document.querySelector("#chat-members-panel");
       const controls = [...drawer.querySelectorAll('button:not(:disabled), a[href], input:not(:disabled)')].filter(control => control.getClientRects().length);
       const first = controls[0], last = controls.at(-1);
       if (!drawer.contains(document.activeElement) || document.activeElement === (event.shiftKey ? first : last)) {
@@ -2243,22 +2336,22 @@ document.addEventListener("keydown", (event) => {
       }
     }
   }
-  if (
-    event.key === "Escape" &&
-    document.body.classList.contains("sidebar-open")
-  )
-    setMenu(false);
-  if (event.key === "Tab" && !dialog.open && document.body.classList.contains("sidebar-open")) {
-    const focusable = [...document.querySelectorAll(".sidebar a, .sidebar button:not(:disabled)"), document.querySelector("[data-menu-button]")];
-    const first = focusable[0],
-      last = focusable.at(-1);
-    if (event.shiftKey && document.activeElement === first) {
+  if (document.body.classList.contains("sidebar-open")) {
+    if (event.key === "Escape") {
       event.preventDefault();
-      last.focus();
-    }
-    if (!event.shiftKey && document.activeElement === last) {
-      event.preventDefault();
-      first.focus();
+      setMenu(false);
+    } else if (event.key === "Tab") {
+      const first = app.querySelector("[data-menu-button]");
+      const controls = [...app.querySelectorAll("#sidebar-frame a, #sidebar-frame button, #sidebar-frame input")]
+        .filter(control => control.getClientRects().length);
+      const last = controls.at(-1);
+      if (event.shiftKey && document.activeElement === first) {
+        event.preventDefault();
+        last?.focus();
+      } else if (!event.shiftKey && document.activeElement === last) {
+        event.preventDefault();
+        first.focus();
+      }
     }
   }
 });
@@ -2296,6 +2389,7 @@ dialog.addEventListener("click", (event) => {
 });
 window.addEventListener("hashchange", () => {
   if (dialog.open) closeDialog();
+  document.body.classList.remove("sidebar-open");
   chatPanel = "";
   render();
   document.querySelector("#page-title")?.focus({ preventScroll: true });
@@ -2319,7 +2413,8 @@ function clearAccountView() {
   drafts.clear();
   chatMentions.clear();
   newChatSetup = emptyChatSetup;
-  chatQuery = chatPanel = "";
+  sidebarQuery = chatPanel = "";
+  document.body.classList.remove("sidebar-open");
   promptFilter = documentFilter = "全部";
   promptQuery = documentQuery = historyQuery = todoQuery = "";
   todoFilter = "全部";
