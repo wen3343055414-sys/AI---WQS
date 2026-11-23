@@ -84,16 +84,6 @@ jobs:
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/plugins-ui-check.mjs
       - name: Verify management pages and responsive navigation
         run: PLAYWRIGHT_MODULE_PATH="$RUNNER_TEMP/auth-ui/node_modules/playwright/index.mjs" node scripts/admin-ui-check.mjs
-      - name: Inspect sidebar preview
-        if: always()
-        run: |
-          node --input-type=module <<'JS'
-          import { readFileSync, existsSync } from 'node:fs';
-          for (const name of ['sidebar-expanded-desktop', 'sidebar-collapsed-desktop', 'sidebar-open-mobile-320', 'navigation-home-desktop']) {
-            const file = 'artifacts/auth/' + name + '.png';
-            if (existsSync(file)) console.log('UI_PREVIEW:' + name + ':' + readFileSync(file).toString('base64'));
-          }
-          JS
       - name: Save interface previews
         if: always()
         uses: actions/upload-artifact@v4

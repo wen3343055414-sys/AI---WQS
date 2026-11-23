@@ -1341,7 +1341,12 @@ function sidebarConversations() {
   const pinned = conversations.filter(session => session.pinned);
   const recent = conversations.filter(session => !session.pinned);
   const limit = 12;
-  return rows("置顶", pinned) + rows(filter ? "搜索结果" : "最近", filter ? recent : recent.slice(0, limit), !filter && recent.length > limit);
+  const visible = filter ? recent : recent.slice(0, limit);
+  if (!filter && page === "chat" && id && !visible.some(session => session.id === id)) {
+    const current = recent.find(session => session.id === id);
+    if (current) visible.push(current);
+  }
+  return rows("置顶", pinned) + rows(filter ? "搜索结果" : "最近", visible, recent.length > visible.length);
 }
 
 function sidebarMarkup(page) {

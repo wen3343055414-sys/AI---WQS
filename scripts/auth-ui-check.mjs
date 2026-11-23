@@ -184,7 +184,8 @@ try {
     element.scrollTop = 0;
     return element.scrollTop;
   });
-  await page.screenshot({ path: path.join(output, "sidebar-expanded-desktop.png") });
+  await page.mouse.move(360, 70);
+  await page.screenshot({ path: path.join(output, "sidebar-expanded-desktop.png"), style: "#toast { visibility: hidden }" });
   await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
   await waitDesktopSidebar(false);
   assert.ok(await page.locator(".workspace").evaluate(element => element.clientWidth) > expandedWidth + 180, "Collapsing the sidebar must release its width");
@@ -200,7 +201,8 @@ try {
     await page.keyboard.press("Tab");
     assert.equal(await page.locator("#sidebar").evaluate(element => element.contains(document.activeElement)), false, "Collapsed links must leave the keyboard focus order");
   }
-  await page.screenshot({ path: path.join(output, "sidebar-collapsed-desktop.png") });
+  await page.mouse.move(360, 70);
+  await page.screenshot({ path: path.join(output, "sidebar-collapsed-desktop.png"), style: "#toast { visibility: hidden }" });
   await page.locator("#message-input").focus();
   await page.keyboard.press("Control+Shift+S");
   await waitDesktopSidebar(true);
@@ -258,7 +260,7 @@ try {
   await pinnedGroup.getByRole("link", { name: "整理产品方案", exact: true }).click();
   await page.locator("#messages .message").nth(3).waitFor();
   await page.locator('#workspace-rail a[href="#home"]').click();
-  await page.locator('#message-input').waitFor();
+  await page.waitForFunction(() => document.querySelector("#message-input")?.form.dataset.draft === "home");
   await page.locator("#message-input").fill("保留首页未发送草稿");
   await page.locator("#sidebar .sidebar-new-chat").click();
   await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
@@ -544,7 +546,8 @@ try {
       const menu = document.querySelector("#sidebar-frame").getBoundingClientRect();
       return menu.left >= -0.5 && menu.right <= innerWidth + 1;
     });
-    await page.screenshot({ path: path.join(output, "sidebar-open-mobile-" + width + ".png") });
+    await page.mouse.move(width - 8, 120);
+    await page.screenshot({ path: path.join(output, "sidebar-open-mobile-" + width + ".png"), style: "#toast { visibility: hidden }" });
     assert.ok(await page.locator("#workspace-rail").evaluate(element => {
       const settings = element.querySelector('a[href="#settings"]').getBoundingClientRect();
       return settings.bottom <= innerHeight + 1 && settings.bottom >= innerHeight - 35;
@@ -565,7 +568,10 @@ try {
     await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
     assert.equal(await page.locator("#message-input").inputValue(), "");
     assert.equal(await page.locator("body").evaluate(element => element.classList.contains("sidebar-open")), false);
+    await page.getByRole("button", { name: "成员", exact: true }).click();
+    await page.locator("#chat-members-panel").waitFor();
     await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+    await page.locator("#chat-members-panel").waitFor({ state: "hidden" });
     await page.waitForFunction(() => document.querySelector("#sidebar-frame").getBoundingClientRect().left >= -0.5);
     await page.locator('#workspace-rail a[href="#tasks"]').click();
     await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
@@ -595,6 +601,18 @@ try {
 
   }
   await page.setViewportSize({ width: 1440, height: 960 });
+  const selectTheme = async name => {
+    await page.locator('#workspace-rail a[href="#settings"]').click();
+    const saved = page.waitForResponse(response => response.url().endsWith("/api/workspace") && response.request().method() === "PUT");
+    await page.getByRole("button", { name, exact: true }).click();
+    assert.ok((await saved).ok());
+  };
+  await selectTheme("深色");
+  await pinnedGroup.getByRole("link", { name: "整理产品方案", exact: true }).click();
+  await page.locator("#messages .message").nth(3).waitFor();
+  assert.equal(await page.locator("body").getAttribute("data-theme"), "dark");
+  await page.screenshot({ path: path.join(output, "sidebar-dark-desktop.png"), style: "#toast { visibility: hidden }" });
+  await selectTheme("浅色");
   await pinnedGroup.getByRole("link", { name: "整理产品方案", exact: true }).click();
   await page.locator("#messages .message").nth(3).waitFor();
   const unpinSaved = page.waitForResponse(response => response.url().endsWith("/api/workspace") && response.request().method() === "PUT");
