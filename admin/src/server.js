@@ -235,7 +235,7 @@ export function createAdminServer({ root = ROOT, settings, store = new AdminStor
           if (input.confirmation !== input.action) throw new HttpError(400, '请在确认窗口确认此操作。');
           const id = store.createJob(input.action);
           send(202, { id, message: `${ACTIONS.get(input.action)}已开始。` });
-          Promise.resolve().then(() => manager.action(input.action)).then(result => store.finishJob(id, 'success', result.message, result.output)).catch(error => store.finishJob(id, 'failed', error.message, error.output));
+          Promise.resolve().then(() => manager.action(input.action)).then(result => store.finishJob(id, result.status === 'deferred' ? 'deferred' : 'success', result.message, result.output)).catch(error => store.finishJob(id, 'failed', error.message, error.output));
           return;
         }
         if (pathname.startsWith('/api/backups/') && request.method === 'GET') {

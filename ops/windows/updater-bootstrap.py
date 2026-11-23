@@ -16,6 +16,9 @@ implementation = None
 
 class UpdateDeferred(Exception):
     """A scheduled check must wait without treating a healthy release as failed."""
+    def __init__(self, message, retry_at=None):
+        super().__init__(message)
+        self.retry_at = retry_at
 
 
 def network_environment():
@@ -59,7 +62,7 @@ def install_transport(module):
 
         def defer_until(self, timestamp):
             deadline = time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(timestamp))
-            raise UpdateDeferred('GitHub check deferred until ' + deadline)
+            raise UpdateDeferred('GitHub check deferred until ' + deadline, timestamp)
 
         def download(self, url, destination):
             with tempfile.TemporaryDirectory(dir=self.root) as directory:
@@ -102,6 +105,12 @@ def install_transport(module):
                     time.sleep(1)
 
         def github(self, suffix):
+            state = self.network_state()
+            # No deployment proof can be fetched during a hard API cooldown.
+            # Return before launching Git so the shared management lock is free
+            # promptly, while update() still performs normal maintenance.
+            if state.get('retryAt', 0) > time.time():
+                self.defer_until(state['retryAt'])
             branch = 'git/ref/heads/'
             if self.config.get('git') and suffix.startswith(branch):
                 reference = 'refs/heads/' + self.config['branch']
@@ -137,6 +146,7 @@ def install_transport(module):
                 return super().update()
             except UpdateDeferred as error:
                 print(error, flush=True)
+                return {'status': 'deferred', 'retryAt': error.retry_at}
 
     module.Deployment = NetworkDeployment
     return module
@@ -149,11 +159,20 @@ def load_implementation(root=ROOT):
         raise RuntimeError('Invalid deployed revision')
     release = root / 'releases' / sha
     candidate = release / 'ops/windows/update-windows.py'
-    if not (release / 'ops/windows/release.json').is_file() or not candidate.is_file():
+    native = (release / 'ops/windows/release.json').is_file() and candidate.is_file()
+    if not native:
         candidate = root / 'legacy-updater.py'
     spec = importlib.util.spec_from_file_location('accepted_windows_updater', candidate)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    # The installed entry is stable; transport fixes must follow the same
+    # accepted release as the core updater instead of freezing at install time.
+    transport = release / 'ops/windows/updater-bootstrap.py'
+    if native and transport.is_file() and transport.resolve() != Path(__file__).resolve():
+        spec = importlib.util.spec_from_file_location('accepted_windows_transport', transport)
+        accepted = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(accepted)
+        return accepted.install_transport(module)
     return install_transport(module)
 
 

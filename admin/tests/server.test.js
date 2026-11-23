@@ -101,6 +101,20 @@ test('failed operations report failure without claiming success', async t => {
   assert.equal(overview.jobs[0].message, 'Docker is unavailable');
 });
 
+test('deferred checks persist as deferred and release the operation slot', async t => {
+  const f = await fixture(t, { action: async () => ({ status: 'deferred', message: 'GitHub 检查已暂缓', output: 'retry after reset' }) });
+  await f.setup();
+  const update = () => f.request('/api/actions', { method: 'POST', body: { action: 'update', confirmation: 'update' } });
+  assert.equal((await update()).status, 202);
+  await new Promise(resolve => setImmediate(resolve));
+  const overview = (await f.request('/api/overview')).data;
+  assert.equal(overview.jobs[0].status, 'deferred');
+  assert.equal(overview.jobs[0].output, 'retry after reset');
+  assert.ok(overview.audit.some(row => row.action === 'update' && row.result === 'deferred'));
+  assert.equal((await update()).status, 202);
+  await new Promise(resolve => setImmediate(resolve));
+});
+
 test('source files, configuration, database and path traversal are never static assets', async t => {
   const f = await fixture(t);
   for (const target of ['/config.json', '/data/admin.sqlite', '/src/server.js', '/.env', '/%2e%2e/config.json']) assert.equal((await f.request(target)).status, 404);

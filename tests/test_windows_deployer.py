@@ -52,7 +52,7 @@ class WindowsDeploymentTests(unittest.TestCase):
     def test_ci_failure_never_builds_or_replaces_current(self):
         original = self.current()
         self.deployment.github = Mock(side_effect=[{"object": {"sha": B}}, {"status": "ahead"}, {"workflow_runs": []}])
-        self.deployment.update()
+        self.assertEqual(self.deployment.update(), {'status': 'waiting-ci', 'candidateSha': B, 'currentSha': A})
         self.deployment.compose.assert_not_called()
         self.deployment.start.assert_not_called()
         self.assertEqual(module.read_json(self.deployment.current_path), original)
@@ -77,14 +77,14 @@ class WindowsDeploymentTests(unittest.TestCase):
         self.assertEqual(module.read_json(self.deployment.failed_path)["sha"], B)
         self.deployment.start.reset_mock()
         self.deployment.github = Mock(return_value={"object": {"sha": B}})
-        self.deployment.update()
+        self.assertEqual(self.deployment.update(), {'status': 'blocked', 'candidateSha': B, 'currentSha': A})
         self.deployment.start.assert_not_called()
 
     def test_success_records_version_only_after_health_checked_start(self):
         self.current()
         self.deployment.github = Mock(side_effect=[{"object": {"sha": B}}, {"status": "ahead"}, successful(B)])
         self.deployment.start.side_effect = lambda sha: self.assertEqual(module.read_json(self.deployment.current_path)["sha"], A)
-        self.deployment.update()
+        self.assertEqual(self.deployment.update(), {'status': 'updated', 'currentSha': B})
         state = module.read_json(self.deployment.current_path)
         self.assertEqual((state["sha"], state["previous"]), (B, A))
 
@@ -95,6 +95,30 @@ class WindowsDeploymentTests(unittest.TestCase):
         module.Deployment.maintain(self.deployment, current)
         self.deployment.backup.assert_called_once_with(A)
         self.assertNotEqual(module.read_json(self.deployment.current_path)["lastBackup"], old)
+
+    def test_installed_entry_updates_only_after_native_release_verification(self):
+        release = self.deployment.release(B) / 'ops/windows'
+        release.mkdir(parents=True)
+        module.write_json(release / 'release.json', {'schemaVersion': 1, 'nativeAdmin': True, 'modelBridge': True})
+        source = release / 'updater-bootstrap.py'
+        source.write_text('accepted transport', encoding='utf-8')
+        entry = self.root / 'update-windows.py'
+        entry.write_text('previous installed transport', encoding='utf-8')
+        for state in ('pending-admin', None):
+            self.deployment.refresh_bootstrap({'sha': B, 'verification': state})
+            self.assertEqual(entry.read_text(), 'previous installed transport')
+        self.deployment.refresh_bootstrap({'sha': B, 'verification': 'verified'})
+        self.assertEqual(entry.read_text(), 'accepted transport')
+        self.assertEqual(source.read_text(), 'accepted transport')
+        timestamp = entry.stat().st_mtime_ns
+        self.deployment.refresh_bootstrap({'sha': B, 'verification': 'verified'})
+        self.assertEqual(entry.stat().st_mtime_ns, timestamp)
+
+    def test_legacy_release_leaves_the_installed_entry_unchanged(self):
+        entry = self.root / 'update-windows.py'
+        entry.write_text('stable installed transport', encoding='utf-8')
+        self.deployment.refresh_bootstrap({'sha': A, 'verification': 'verified'})
+        self.assertEqual(entry.read_text(), 'stable installed transport')
 
     def test_archive_traversal_is_rejected_before_extraction(self):
         self.deployment.prepare_release = module.Deployment.prepare_release.__get__(self.deployment)

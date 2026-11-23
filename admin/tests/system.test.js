@@ -59,6 +59,31 @@ test('concurrent status refreshes share one collection', async t => {
   const [one, two] = await Promise.all([manager.overview(), manager.overview()]);
   assert.equal(count, 1); assert.deepEqual(one, two);
 });
+
+test('matching GitHub cooldown is visible without exposing the raw network cache', async t => {
+  const manager = await fixture(t, async () => { throw Error('fixture offline'); });
+  const retryAt = Math.floor(Date.now() / 1000) + 3600;
+  const file = path.join(manager.deploymentRoot, 'github-network.json');
+  const state = { repository: 'example/workbench', branch: 'development', retryAt, privateField: 'fixture-private-value' };
+  await writeFile(file, JSON.stringify(state));
+  const data = await manager.collect();
+  assert.deepEqual(data.updateCheck, { state: 'deferred', retryAt: new Date(retryAt * 1000).toISOString() });
+  assert.ok(!JSON.stringify(data).includes('fixture-private-value'));
+  for (const change of [{ branch: 'other' }, { repository: 'other/project' }, { retryAt: 1 }, { retryAt: 'invalid' }, { retryAt: 1e20 }]) {
+    await writeFile(file, JSON.stringify({ ...state, ...change }));
+    assert.deepEqual((await manager.collect()).updateCheck, { state: 'ready' });
+  }
+  await writeFile(file, 'invalid json');
+  assert.deepEqual((await manager.collect()).updateCheck, { state: 'unknown' });
+});
+
+test('deferred updater result reaches the job layer and diagnostic output stays redacted', async t => {
+  const manager = await fixture(t, async () => ({ stdout: JSON.stringify({ ok: true, status: 'deferred', message: '等待 GitHub 恢复' }), stderr: 'api_key=fixture-secret' }));
+  const result = await manager.action('update');
+  assert.equal(result.status, 'deferred');
+  assert.equal(result.message, '等待 GitHub 恢复');
+  assert.ok(!result.output.includes('fixture-secret'));
+});
 test('log tail bounds output and hides assigned credentials', async t => {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'admin-log-test-'));
   t.after(() => rm(directory, { recursive: true, force: true }));
