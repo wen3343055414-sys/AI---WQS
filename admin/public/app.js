@@ -5,14 +5,14 @@ const icon = name => `<svg aria-hidden="true"><use href="#i-${name}"/></svg>`;
 const number = value => new Intl.NumberFormat('zh-CN').format(value || 0);
 const escape = value => String(value ?? '').replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
 const pages = {
-  overview: ['服务器总览', 'SERVER OVERVIEW', '从这里，了解本机服务的每一刻。'],
-  services: ['服务管理', 'SERVICE MANAGEMENT', '独立管理前后端服务，掌握每一次启动与停止。'],
-  logs: ['运行日志', 'RUNTIME LOGS', '跟随服务输出，快速了解当前运行情况。'],
-  backups: ['数据备份', 'DATABASE BACKUPS', '为重要的数据，留一份安心。'],
-  deployment: ['版本与更新', 'RELEASE MANAGEMENT', '每一次更新，都有检查和退路。'],
-  audit: ['操作记录', 'ACTIVITY HISTORY', '管理操作有记录，运行过程可追溯。'],
-  'api-settings': ['API 接口设置', 'MODEL API SETTINGS', '统一连接国内、海外与本机模型，让每次对话都有合适的选择。'],
-  websites: ['域名与网站', 'DOMAINS & WEBSITES', '管理工作台的真实访问地址，让同一网络下的设备连接本机服务。'],
+  overview: '服务器总览',
+  services: '服务管理',
+  logs: '运行日志',
+  backups: '数据备份',
+  deployment: '版本与更新',
+  audit: '操作记录',
+  'api-settings': 'API 接口设置',
+  websites: '域名与网站',
 };
 const actions = {
   start: ['启动工作台', '启动前后端容器，并检查服务是否正常。'],
@@ -25,7 +25,43 @@ const actions = {
   resume: ['恢复自动更新', '恢复每分钟一次的版本检查。'],
 };
 let csrf = '', setupRequired = false, authenticated = false, currentPage = 'overview';
-let report = null, refreshPending = false, logPending = false, actionPending = false;
+let report = null, refreshPending = false, logRequest = null, actionPending = false;
+const mobile = matchMedia('(max-width: 760px)');
+const menu = $('admin-menu'), sidebar = $('admin-sidebar');
+function setMenu(open, restoreFocus = false) {
+  const expanded = mobile.matches && open;
+  menu.hidden = !mobile.matches;
+  menu.setAttribute('aria-expanded', String(expanded));
+  menu.setAttribute('aria-label', expanded ? '收起后台导航' : '展开后台导航');
+  sidebar.classList.toggle('is-open', expanded);
+  sidebar.inert = mobile.matches && !expanded;
+  $('admin-nav-backdrop').hidden = !expanded;
+  $('admin-main').inert = expanded;
+  document.querySelector('.top-actions').inert = expanded;
+  document.body.classList.toggle('admin-nav-open', expanded);
+  if (expanded) sidebar.querySelector('.nav-item.active')?.focus();
+  else if (restoreFocus) menu.focus();
+}
+menu.addEventListener('click', () => setMenu(menu.getAttribute('aria-expanded') !== 'true', true));
+$('admin-nav-backdrop').addEventListener('click', () => setMenu(false, true));
+mobile.addEventListener('change', () => setMenu(false));
+document.addEventListener('keydown', event => {
+  if (menu.getAttribute('aria-expanded') !== 'true') return;
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    setMenu(false, true);
+  } else if (event.key === 'Tab') {
+    const first = sidebar.querySelector('button');
+    if (!event.shiftKey && document.activeElement === menu) {
+      event.preventDefault();
+      first.focus();
+    } else if (event.shiftKey && document.activeElement === first) {
+      event.preventDefault();
+      menu.focus();
+    }
+  }
+});
+setMenu(false);
 let cpuHistory = [], pendingAction = null, toastTimer, lastFinishedJob = null;
 const date = (value, compact = false) => {
   if (!value) return '—';
@@ -75,45 +111,51 @@ function showAuth(setup) {
   setupRequired = setup; $('auth-view').hidden = false; $('app-view').hidden = true; $('auth-form').hidden = false;
   $('confirm-field').hidden = !setup; $('password-confirm').required = setup;
   $('password').setAttribute('autocomplete', setup ? 'new-password' : 'current-password');
-  $('auth-title').textContent = setup ? '设置管理后台密码' : '欢迎回到管理后台';
-  $('auth-description').textContent = setup ? '首次使用，为独立管理服务设置一个 10–128 位密码。' : '输入独立管理密码，查看并管理本机服务。';
-  $('auth-submit').textContent = setup ? '设置密码并进入后台 →' : '进入管理后台 →';
+  setMenu(false);
+  $('auth-title').textContent = setup ? '设置管理密码' : '登录';
+  $('auth-description').textContent = setup ? '使用 10–128 个字符的独立管理密码。' : '';
+  $('auth-description').hidden = !setup;
+  $('auth-submit').textContent = setup ? '设置密码并登录' : '登录';
+  $('password').focus();
 }
 async function enter() {
   authenticated = true; $('auth-view').hidden = true; $('app-view').hidden = false;
-  const requested = location.hash.slice(1); navigate(pages[requested] ? requested : 'overview');
+  const requested = location.hash.slice(1);
+  navigate(Object.hasOwn(pages, requested) ? requested : 'overview');
   await refresh();
 }
 $('auth-form').addEventListener('submit', async event => {
   event.preventDefault(); $('auth-error').textContent = '';
   const password = $('password').value;
   if (setupRequired && password !== $('password-confirm').value) { $('auth-error').textContent = '两次输入的密码不一致。'; return; }
-  $('auth-submit').disabled = true;
+  const submit = $('auth-submit'), label = submit.textContent;
+  submit.disabled = true;
+  submit.textContent = '正在登录…';
   try {
     const result = await api(setupRequired ? '/api/setup' : '/api/login', { method: 'POST', body: JSON.stringify({ password }) });
     csrf = result.csrf; $('password').value = ''; $('password-confirm').value = ''; await enter();
   } catch (error) { $('auth-error').textContent = error.message; }
-  finally { $('auth-submit').disabled = false; }
+  finally { submit.disabled = false; submit.textContent = label; }
 });
 $('logout').addEventListener('click', async () => { if (currentPage === 'websites' && !websiteUI.canLeave()) return; try { await api('/api/logout', { method: 'POST', body: '{}' }); authenticated = false; csrf = ''; showAuth(false); } catch (error) { toast(error.message); } });
 function navigate(page) {
-  if (!pages[page]) return;
-  if (currentPage === 'websites' && page !== currentPage && !websiteUI.canLeave()) return;
+  if (!Object.hasOwn(pages, page)) return;
+  if (currentPage === 'websites' && page !== currentPage && !websiteUI.canLeave()) return false;
   currentPage = page;
-  $('app-view').classList.toggle('domains-mode', page === 'websites');
   document.querySelectorAll('.page-panel').forEach(node => { node.hidden = node.id !== `page-${page}`; });
   document.querySelectorAll('.nav-item').forEach(node => { const selected = node.dataset.page === page; node.classList.toggle('active', selected); node.setAttribute('aria-current', selected ? 'page' : 'false'); });
-  const [title, eyebrow, description] = pages[page];
-  $('page-title').textContent = $('breadcrumb-page').textContent = title;
-  $('page-eyebrow').textContent = eyebrow; $('page-description').textContent = description;
+  const title = pages[page];
+  $('page-title').textContent = title;
+  setMenu(false);
   document.title = `${title} · 智作台服务端`; history.replaceState(null, '', `#${page}`);
   if (page === 'logs' && authenticated) loadLogs();
   if (page === 'api-settings' && authenticated) modelUI.load();
   if (page === 'websites' && authenticated) websiteUI.load();
+  return true;
 }
 document.addEventListener('click', event => {
   const navigation = event.target.closest('[data-page]');
-  if (navigation) navigate(navigation.dataset.page);
+  if (navigation && navigate(navigation.dataset.page)) $('page-title').focus({ preventScroll: true });
   const action = event.target.closest('[data-action]');
   if (action && !action.disabled) requestAction(action.dataset.action);
   const job = event.target.closest('[data-job]');
@@ -128,12 +170,20 @@ function renderServices(containers, detailed = false) {
     const type = healthy ? 'success' : container.state === 'running' ? 'warning' : 'neutral';
     const label = healthy ? '运行正常' : container.state === 'running' ? '健康检查中' : '已停止';
     const name = container.service === 'backend' ? '后端服务' : '前端代理';
-    return `<div class="service-row"><span class="service-symbol">${icon(container.service === 'backend' ? 'server' : 'grid')}</span><div class="service-name"><strong>${name}${detailed ? ' · ' + escape(container.name) : ''}</strong><small title="${escape(container.image)}">${escape(container.image)}</small>${detailed ? `<small>${escape(container.ports || '仅容器内部访问')} · ${escape(container.status)}</small>` : ''}</div><div class="service-stat"><strong>${escape(metric?.cpu || '—')}</strong>CPU 使用</div><div class="service-stat"><strong>${escape(metric?.memory?.split('/')[0].trim() || '—')}</strong>内存占用</div><span class="badge ${type}">${label}</span></div>`;
+    return `<div class="service-row"><span class="service-symbol">${icon(container.service === 'backend' ? 'server' : 'grid')}</span><div class="service-name"><strong>${name}</strong>${detailed ? `<small title="${escape(container.image)}">${escape(container.image)}</small><small>${escape(container.ports || '仅容器内部访问')}</small>` : ''}</div><div class="service-stat"><strong>${escape(metric?.cpu || '—')}</strong>CPU 使用</div><div class="service-stat"><strong>${escape(metric?.memory?.split('/')[0].trim() || '—')}</strong>内存占用</div><span class="badge ${type}">${label}</span></div>`;
   }).join('');
 }
 function renderJobs(jobs) {
-  if (!jobs.length) return '<div class="empty">暂无管理任务，操作后会显示在这里。</div>';
-  return jobs.slice(0, 5).map(job => `<div class="activity-item"><span class="activity-mark">${icon(job.status === 'success' ? 'check' : job.status === 'running' ? 'refresh' : 'info')}</span><div class="activity-text"><strong>${escape(actions[job.action]?.[0] || job.action)}</strong><small>${escape(job.message)}</small></div><span class="activity-time">${relative(job.created)}</span><span class="badge ${job.status === 'success' ? 'success' : job.status === 'failed' ? 'failed' : 'neutral'}">${({ success: '已完成', running: '执行中', failed: '未完成', interrupted: '已中断' })[job.status] || job.status}</span><button class="text-btn" data-job="${escape(job.id)}">详情</button></div>`).join('');
+  if (!jobs.length) return '<div class="empty">暂无管理任务</div>';
+  return jobs.slice(0, 5).map(job => {
+    const status = { success: '已完成', running: '执行中', failed: '未完成', interrupted: '已中断', deferred: '已暂缓' }[job.status] || job.status;
+    const tone = job.status === 'success' ? 'success' : job.status === 'failed' ? 'failed' : job.status === 'deferred' ? 'warning' : 'neutral';
+    return `<button type="button" class="activity-item" data-job="${escape(job.id)}">
+      <span class="activity-text"><strong>${escape(actions[job.action]?.[0] || job.action)}</strong><small>${escape(job.message)}</small></span>
+      <time class="activity-time" datetime="${escape(job.created)}">${date(job.created, true)}</time>
+      <span class="badge ${tone}">${escape(status)}</span>${icon('arrow')}
+    </button>`;
+  }).join('');
 }
 function renderChart(cpu, timestamp) {
   if (!cpuHistory.length || cpuHistory.at(-1).time !== timestamp) cpuHistory.push({ value: cpu, time: timestamp });
@@ -144,7 +194,7 @@ function renderChart(cpu, timestamp) {
   $('chart-line').setAttribute('points', points); $('chart-area').setAttribute('points', `0,145 ${points} 660,145`);
   $('cpu-mini').setAttribute('points', values.map((item, index) => `${index * 180 / (values.length - 1)},${21 - item.value / max * 18}`).join(' '));
   $('chart-max').textContent = `${max}%`; $('chart-mid').textContent = `${(max / 2).toFixed(1)}%`;
-  $('chart-start').textContent = date(cpuHistory[0].time, true); $('chart-end').textContent = '现在';
+  $('chart-start').textContent = date(cpuHistory[0].time, true);
 }
 function render() {
   const r = report, containers = r.containers || [], files = r.backups?.files || [];
@@ -155,66 +205,82 @@ function render() {
   const memoryPercent = (r.stats || []).reduce((sum, row) => sum + (parseFloat(row.memoryPercent) || 0), 0);
   renderModelUsage(r.modelUsage);
   modelUI.updateUsage(r.modelUsage);
-  $('node-address').textContent = `127.0.0.1:${r.admin.port}`;
   $('open-workbench').href = r.appUrl;
   $('metric-status').textContent = !r.docker.available ? '未连接' : healthy ? '运行正常' : running ? '检查中' : '已停止';
   $('metric-status-detail').textContent = !r.docker.available ? '请先打开 Docker Desktop' : `${running} / ${containers.length} 个服务运行中`;
   $('metric-cpu').innerHTML = r.stats.length ? `${cpu.toFixed(2)}<small>%</small>` : '—';
-  $('metric-cpu-detail').textContent = `${r.host.cpuCount} 核本机 · 容器合计使用率`;
   $('metric-memory').innerHTML = r.stats.length ? escape(bytes(memory)) : '—';
-  $('metric-memory-detail').textContent = `占可用容器内存 ${memoryPercent.toFixed(2)}%`;
+  $('metric-memory-detail').textContent = r.stats.length ? `${memoryPercent.toFixed(1)}% 已用` : '';
   $('memory-meter').value = Math.min(100, memoryPercent);
   $('metric-backups').innerHTML = `${files.length}<small>份</small>`;
-  $('metric-backup-detail').textContent = files[0] ? `最近一次 · ${relative(files[0].modifiedAt)}` : r.backups.error ? '暂时无法读取备份' : '尚未创建备份';
-  $('nav-service-count').textContent = containers.length; $('services-total').textContent = `${containers.length} 个服务`;
+  $('metric-backup-detail').textContent = files[0] ? relative(files[0].modifiedAt) : r.backups.error ? '暂时无法读取备份' : '尚未创建备份';
   $('overview-services').innerHTML = renderServices(containers); $('detailed-services').innerHTML = renderServices(containers, true);
-  $('deployment-summary').textContent = `当前版本 ${r.deployment.sha?.slice(0, 7) || '—'} · ${r.project}`;
-  badge($('services-badge'), healthy ? '健康检查通过' : '等待服务', healthy ? 'success' : 'neutral');
-  const schedulerText = r.scheduler.error ? '无法读取' : r.scheduler.enabled ? '已启用' : '已暂停';
-  for (const id of ['auto-update-badge', 'deploy-scheduler-badge']) badge($(id), schedulerText, r.scheduler.enabled ? 'success' : 'neutral');
+  badge($('services-badge'), $('metric-status').textContent, healthy ? 'success' : running ? 'warning' : 'neutral');
+  const limited = r.scheduler.enabled && r.updateCheck?.state === 'deferred';
+  const schedulerText = r.scheduler.error ? '无法读取' : limited ? '等待 GitHub' : r.scheduler.enabled ? '已启用' : '已暂停';
+  for (const id of ['auto-update-badge', 'deploy-scheduler-badge']) badge($(id), schedulerText, limited ? 'warning' : r.scheduler.enabled ? 'success' : 'neutral');
+  const checkStatus = $('update-check-status');
+  checkStatus.hidden = !limited && r.updateCheck?.state !== 'unknown';
+  checkStatus.textContent = limited ? `GitHub 接口限流，预计 ${date(r.updateCheck.retryAt)} 后重试。等待期间保留当前运行版本。` : r.updateCheck?.state === 'unknown' ? '暂时无法读取更新检查状态，请查看更新日志。' : '';
+  const schedulerAction = $('scheduler-action');
+  schedulerAction.dataset.action = r.scheduler.enabled ? 'pause' : 'resume';
+  schedulerAction.textContent = r.scheduler.enabled ? '暂停自动更新' : '恢复自动更新';
   $('sidebar-branch').textContent = r.branch; $('sidebar-deployed').textContent = date(r.deployment.updatedAt, true); $('sidebar-version').textContent = r.deployment.sha?.slice(0, 7) || '—';
   $('host-cpus').textContent = `${r.host.cpuCount} 核`; $('host-memory').textContent = `${bytes(r.host.memoryUsed)} / ${bytes(r.host.memoryTotal)}`;
   $('host-uptime').textContent = duration(r.host.uptimeSeconds); $('admin-uptime').textContent = duration(r.admin.uptimeSeconds);
   $('admin-details').innerHTML = [['访问地址', `127.0.0.1:${r.admin.port}`], ['进程 ID', r.admin.pid], ['管理服务内存', bytes(r.admin.memoryBytes)], ['连续运行', duration(r.admin.uptimeSeconds)]].map(([key, value]) => `<div><span>${key}</span><strong>${escape(value)}</strong></div>`).join('');
   $('backup-count').textContent = `${files.length} 份`; $('backup-size').textContent = bytes(files.reduce((sum, file) => sum + file.size, 0)); $('database-size').textContent = bytes(r.backups.databaseBytes);
-  $('backup-table').innerHTML = files.length ? files.map(file => `<tr><td><span class="mono">${escape(file.name)}</span><small>SQLite 数据库快照</small></td><td>${date(file.modifiedAt)}</td><td>${bytes(file.size)}</td><td class="right"><a href="/api/backups/${encodeURIComponent(file.name)}" download>${icon('download')}下载</a></td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无可显示的备份文件</td></tr>';
+  $('backup-table').innerHTML = files.length ? files.map(file => `<tr><td><span class="mono">${escape(file.name)}</span></td><td>${date(file.modifiedAt)}</td><td>${bytes(file.size)}</td><td class="right"><a href="/api/backups/${encodeURIComponent(file.name)}" download>${icon('download')}下载</a></td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无可显示的备份文件</td></tr>';
   $('backup-error').hidden = !r.backups.error; $('backup-error').textContent = r.backups.error || '';
   $('current-sha').textContent = r.deployment.sha?.slice(0, 12) || '尚未部署';
   if (/^[\w.-]+\/[\w.-]+$/.test(r.repository)) $('commit-link').href = `https://github.com/${r.repository}/commit/${r.deployment.sha}`;
-  $('deployment-details').innerHTML = [['代码仓库', r.repository], ['跟随分支', r.branch], ['Docker 前后端版本', r.deployment.sha?.slice(0, 12) || '—'], ['独立服务端版本', r.admin.revision?.slice(0, 12) || '本机版本'], ['版本一致性', r.admin.revision === r.deployment.sha ? '前端、后端与管理服务使用同一提交' : '等待管理服务切换或核查'], ['部署项目', r.project], ['上次部署', date(r.deployment.updatedAt)], ['上一版本', r.deployment.previous?.slice(0, 12) || '暂无'], ['最近备份', date(r.deployment.lastBackup)]].map(([key, value]) => `<div><dt>${key}</dt><dd>${escape(value)}</dd></div>`).join('');
-  $('recent-jobs').innerHTML = renderJobs(r.jobs); $('deployment-jobs').innerHTML = renderJobs(r.jobs);
-  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录', api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型', api_provider_delete: '删除模型连接', api_model_delete: '移除模型' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
+  const detailRows = fields => fields.map(([key, value]) => `<div><dt>${key}</dt><dd>${escape(value)}</dd></div>`).join('');
+  const containerVersion = service => {
+    const container = containers.find(item => item.service === service && item.state === 'running');
+    return container?.image?.match(/:([a-f0-9]{40})(?:-models-v1)?$/)?.[1].slice(0, 12) || '—';
+  };
+  $('release-summary').innerHTML = detailRows([
+    ['跟随分支', r.branch], ['上次部署', date(r.deployment.updatedAt)], ['上一版本', r.deployment.previous?.slice(0, 12) || '—'],
+  ]);
+  $('deployment-details').innerHTML = detailRows([
+    ['代码仓库', r.repository], ['前端容器版本', containerVersion('frontend')], ['后端容器版本', containerVersion('backend')],
+    ['管理服务版本', r.admin.revision?.slice(0, 12) || '—'], ['部署项目', r.project], ['最近备份', date(r.deployment.lastBackup)],
+  ]);
+  const jobsMarkup = renderJobs(r.jobs);
+  for (const id of ['recent-jobs', 'deployment-jobs']) {
+    const target = $(id);
+    if (target.innerHTML !== jobsMarkup && !target.contains(document.activeElement)) target.innerHTML = jobsMarkup;
+  }
+  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录', api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型', api_provider_delete: '删除模型连接', api_model_delete: '移除模型' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : entry.result === 'deferred' ? 'warning' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断', deferred: '已暂缓' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
   const busy = actionPending || r.jobs.some(job => job.status === 'running');
   document.querySelectorAll('[data-action]').forEach(button => {
     const action = button.dataset.action;
-    button.disabled = busy || (action === 'rollback' && !r.deployment.previous) || (action === 'pause' && !r.scheduler.enabled) || (action === 'resume' && (r.scheduler.enabled || r.maintenance?.stoppedByAdmin));
+    button.disabled = busy || (button.id === 'scheduler-action' && (!r.scheduler.exists || Boolean(r.scheduler.error))) || (action === 'rollback' && !r.deployment.previous) || (action === 'pause' && !r.scheduler.enabled) || (action === 'resume' && (r.scheduler.enabled || r.maintenance?.stoppedByAdmin));
   });
   const currentJob = r.jobs.find(job => job.status === 'running');
   $('job-notice').hidden = !currentJob;
-  $('job-notice').textContent = currentJob ? `${actions[currentJob.action]?.[0] || '操作'}正在执行。你可以留在本页等待，或在操作记录中查看结果。` : '';
+  $('job-notice').textContent = currentJob ? `${actions[currentJob.action]?.[0] || '操作'}进行中…` : '';
   const finished = r.jobs.find(job => job.status !== 'running');
   if (lastFinishedJob && finished && finished.id !== lastFinishedJob) toast(finished.message);
   if (finished) lastFinishedJob = finished.id;
-  const errors = [r.previewOnly && '界面验收环境：本页用于检查布局和交互，操作不会影响真实服务。', !r.docker.available && '未连接到 Docker 引擎，请打开 Docker Desktop。管理服务仍可访问。', r.scheduler.error].filter(Boolean);
+  const errors = [r.previewOnly && '界面验收环境：本页用于检查布局和交互，操作不会影响真实服务。', !r.docker.available && '未连接 Docker。请打开 Docker Desktop。', r.scheduler.error].filter(Boolean);
   $('connection-error').hidden = !errors.length; $('connection-error').textContent = errors.join(' ');
-  $('last-refreshed').innerHTML = `<i class="live-dot"></i>更新于 ${escape(date(r.updatedAt, true))}`;
   if (r.stats.length) renderChart(cpu, r.updatedAt);
 }
 function renderModelUsage(usage) {
   if (!usage) return;
   const { model, today, total } = usage;
-  badge($('model-ready-badge'), model.ready ? '真实模型已配置' : '等待配置', model.ready ? 'success' : 'warning');
-  $('model-active-description').textContent = model.ready ? `${model.provider} · ${model.model} · 保存配置后自动同步到工作台` : model.message;
+  $('model-active-description').textContent = model.ready ? `${model.provider} · ${model.model}` : '尚未配置默认模型';
   $('token-today').textContent = number(today.totalTokens);
   $('token-total').textContent = number(total.totalTokens);
-  $('token-today-requests').textContent = `今日 ${number(today.requests)} 次请求 · 北京时间`;
-  $('token-total-requests').textContent = usage.since ? `共 ${number(total.requests)} 次 · 起始 ${date(usage.since, true)}` : '首次请求后开始累计';
+  $('token-today-requests').textContent = `${number(today.requests)} 次请求`;
+  $('token-total-requests').textContent = usage.since ? `${number(total.requests)} 次请求` : '';
   $('token-input-output').textContent = `${number(total.promptTokens)} / ${number(total.completionTokens)}`;
-  $('token-cached').textContent = `输入缓存命中 ${number(total.cachedTokens)} Token（已包含在输入中）`;
-  $('token-results').textContent = `${number(total.succeeded)} 成功 / ${number(total.failed)} 失败`;
+  $('token-cached').textContent = total.cachedTokens ? `缓存命中 ${number(total.cachedTokens)}` : '';
+  $('token-results').textContent = `${number(total.succeeded)} / ${number(total.failed)}`;
   const unknown = total.requests - total.meteredRequests;
-  $('token-missing').textContent = `${number(total.pending)} 次进行中 · ${number(unknown)} 次未取得用量`;
-  $('token-recent').innerHTML = usage.recent.length ? usage.recent.map(item => `<tr><td>${date(item.time, true)}${item.error ? `<small title="${escape(item.error)}">${escape(item.error)}</small>` : ''}</td><td class="mono">${escape(item.model)}</td><td><span class="badge ${item.status === 'success' ? 'success' : item.status === 'failed' ? 'failed' : 'neutral'}">${({ success: '已回复', failed: '失败', pending: '进行中', unknown: '结果未确认' })[item.status]}</span></td><td>${item.promptTokens === null ? '—' : number(item.promptTokens)}</td><td>${item.completionTokens === null ? '—' : number(item.completionTokens)}</td><td>${item.totalTokens === null ? '—' : number(item.totalTokens)}</td><td>${item.latencyMs === null ? '—' : `${(item.latencyMs / 1000).toFixed(1)} s`}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">尚无模型请求。前往工作台发送第一条消息。</td></tr>';
+  $('token-missing').textContent = [total.pending ? `${number(total.pending)} 次进行中` : '', unknown > 0 ? `${number(unknown)} 次用量未知` : ''].filter(Boolean).join(' · ');
+  $('token-recent').innerHTML = usage.recent.length ? usage.recent.map(item => `<tr><td>${date(item.time, true)}${item.error ? `<small title="${escape(item.error)}">${escape(item.error)}</small>` : ''}</td><td class="mono">${escape(item.model)}</td><td><span class="badge ${item.status === 'success' ? 'success' : item.status === 'failed' ? 'failed' : 'neutral'}">${({ success: '已回复', failed: '失败', pending: '进行中', unknown: '结果未确认' })[item.status]}</span></td><td>${item.promptTokens === null ? '—' : number(item.promptTokens)}</td><td>${item.completionTokens === null ? '—' : number(item.completionTokens)}</td><td>${item.totalTokens === null ? '—' : number(item.totalTokens)}</td><td>${item.latencyMs === null ? '—' : `${(item.latencyMs / 1000).toFixed(1)} s`}</td></tr>`).join('') : '<tr><td colspan="7" class="empty">暂无请求</td></tr>';
 }
 async function refresh() {
   if (!authenticated || refreshPending) return;
@@ -225,15 +291,35 @@ async function refresh() {
 }
 $('refresh').addEventListener('click', () => { refresh(); if (currentPage === 'websites') websiteUI.load(); });
 async function loadLogs() {
-  if (!authenticated || logPending) return;
-  logPending = true; $('log-refresh').disabled = true;
+  if (!authenticated) return;
+  logRequest?.abort();
+  const request = new AbortController();
+  logRequest = request;
+  const source = $('log-source').value;
+  const lines = $('log-lines').value;
+  const output = $('log-output');
+  $('log-refresh').classList.add('spinning');
+  output.setAttribute('aria-busy', 'true');
   try {
-    const source = $('log-source').value;
-    const result = await api(`/api/logs?source=${encodeURIComponent(source)}&lines=${$('log-lines').value}`);
-    $('log-output').textContent = result.text || '该服务暂无日志输出。';
-    $('log-file-label').textContent = `${source}.log`; $('log-updated').textContent = `更新于 ${date(result.updatedAt)}`;
-  } catch (error) { $('log-output').textContent = error.message; }
-  finally { logPending = false; $('log-refresh').disabled = false; }
+    const result = await api(`/api/logs?source=${encodeURIComponent(source)}&lines=${lines}`, { signal: request.signal });
+    if (logRequest !== request) return;
+    const previousTop = output.scrollTop;
+    const atEnd = output.scrollHeight - output.clientHeight - previousTop < 8;
+    const text = result.text || '暂无日志';
+    if (output.textContent !== text) {
+      output.textContent = text;
+      output.scrollTop = $('log-follow').checked && atEnd ? output.scrollHeight : previousTop;
+    }
+    $('log-updated').textContent = date(result.updatedAt);
+  } catch (error) {
+    if (logRequest === request && !request.signal.aborted) output.textContent = error.message;
+  } finally {
+    if (logRequest === request) {
+      logRequest = null;
+      $('log-refresh').classList.remove('spinning');
+      output.removeAttribute('aria-busy');
+    }
+  }
 }
 for (const id of ['log-source', 'log-lines']) $(id).addEventListener('change', loadLogs);
 $('log-refresh').addEventListener('click', loadLogs);
@@ -241,7 +327,9 @@ function requestAction(action) {
   if (!actions[action] || actionPending) return;
   if (!['stop', 'restart', 'rollback'].includes(action)) { performAction(action); return; }
   pendingAction = action; $('confirm-title').textContent = actions[action][0]; $('confirm-description').textContent = actions[action][1];
-  $('confirm-accept').className = action === 'stop' ? 'btn danger' : 'btn primary'; $('confirm-dialog').showModal();
+  $('confirm-accept').className = action === 'stop' ? 'btn danger' : 'btn primary';
+  $('confirm-accept').textContent = actions[action][0];
+  $('confirm-dialog').showModal();
 }
 $('confirm-cancel').addEventListener('click', () => { pendingAction = null; $('confirm-dialog').close(); });
 $('confirm-accept').addEventListener('click', () => { const action = pendingAction; pendingAction = null; $('confirm-dialog').close(); performAction(action); });
@@ -265,9 +353,9 @@ $('job-close').addEventListener('click', () => $('job-dialog').close());
 
 const modelUI = initApiSettings({ api, toast, escape, icon, date, number });
 const websiteUI = initWebsites({ api, toast, escape, icon, date });
-setInterval(() => { if (!document.hidden) { refresh(); if (currentPage === 'logs' && $('log-follow').checked) loadLogs(); if (currentPage === 'websites' && authenticated) websiteUI.refreshHosting(); } }, 8000);
+setInterval(() => { if (!document.hidden) { refresh(); if (currentPage === 'logs' && $('log-follow').checked && !logRequest) loadLogs(); if (currentPage === 'websites' && authenticated) websiteUI.refreshHosting(); } }, 8000);
 document.addEventListener('visibilitychange', () => { if (!document.hidden) refresh(); });
 try {
-  const session = await api('/api/session'); csrf = session.csrf || ''; $('node-address').textContent = `127.0.0.1:${session.port}`;
+  const session = await api('/api/session'); csrf = session.csrf || '';
   if (session.authenticated) await enter(); else showAuth(session.setupRequired);
 } catch (error) { $('auth-title').textContent = '暂时无法连接管理服务'; $('auth-description').textContent = `${error.message} 请刷新页面重试。`; }

@@ -3,11 +3,14 @@ import { readFile } from "node:fs/promises";
 import { WorkspaceStore } from "./store.js";
 import { createApi } from "./api.js";
 import { ModelClient } from "./model-client.js";
+import { Intelligence } from "./intelligence.js";
 
 process.umask(0o077);
 const store = new WorkspaceStore(process.env.DATA_DIR || "./data");
 const runtimeVersion = (process.env.APP_VERSION || "0.3.0-local") + (process.env.MODEL_GATEWAY_URL ? '-models-v1' : '');
-const api = createApi(store, runtimeVersion, new ModelClient(store));
+const model = new ModelClient(store);
+const intelligence = new Intelligence(store, model);
+const api = createApi(store, runtimeVersion, model, { intelligence });
 
 const host = process.env.HOST ?? "127.0.0.1";
 const portValue = process.env.PORT ?? "3000";
@@ -25,6 +28,8 @@ const assets = new Map([
   ["/sync.js", ["sync.js", "text/javascript; charset=utf-8"]],
   ["/auth.js", ["auth.js", "text/javascript; charset=utf-8"]],
   ["/auth.css", ["auth.css", "text/css; charset=utf-8"]],
+  ["/intel.js", ["intel.js", "text/javascript; charset=utf-8"]],
+  ["/intel.css", ["intel.css", "text/css; charset=utf-8"]],
   ["/favicon.svg", ["favicon.svg", "image/svg+xml"]],
 ]);
 
@@ -81,10 +86,12 @@ server.listen(Number(portValue), host, () => {
     ? `[${address.address}]`
     : address.address;
   console.log(`AI---WQS running at http://${urlHost}:${address.port}`);
+  intelligence.start();
 });
 
 for (const signal of ["SIGINT", "SIGTERM"]) {
   process.on(signal, () => {
+    intelligence.stop();
     server.close(() => { store.close(); process.exit(0); });
     setTimeout(() => process.exit(1), 5000).unref();
   });

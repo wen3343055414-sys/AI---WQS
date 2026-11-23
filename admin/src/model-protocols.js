@@ -1,3 +1,4 @@
+import { randomBytes } from 'node:crypto';
 export const PROTOCOLS = Object.freeze({ openai: 'OpenAI 兼容', anthropic: 'Anthropic Messages', gemini: 'Gemini 原生' });
 const valid = n => Number.isSafeInteger(n) && n >= 0 && n <= 1_000_000_000;
 
@@ -35,20 +36,64 @@ export function parseModels(config, data, key) {
   return { models, cursor: typeof cursor === 'string' && cursor.length <= 1000 ? cursor : null };
 }
 
-export function chatRequest(config, messages, maxTokens) {
+export function chatRequest(config, messages, maxTokens, tools = []) {
   const system = messages.filter(m => m.role === 'system').map(m => m.content).join('\n');
   const conversation = messages.filter(m => m.role !== 'system');
-  if (config.protocol === 'anthropic') return { url: new URL(`${config.baseUrl}/messages`), input: { model: config.model, system, messages: conversation, max_tokens: maxTokens, stream: false } };
-  if (config.protocol === 'gemini') return { url: new URL(`${config.baseUrl}/models/${encodeURIComponent(config.model.replace(/^models\//, ''))}:generateContent`),
-    input: { systemInstruction: { parts: [{ text: system }] }, contents: conversation.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', parts: [{ text: m.content }] })), generationConfig: { maxOutputTokens: maxTokens } } };
-  const url = new URL(`${config.baseUrl}/chat/completions`);
-  const input = { model: config.model, messages, stream: false, [['openai', 'minimax'].includes(config.preset) ? 'max_completion_tokens' : 'max_tokens']: maxTokens };
+  if (config.protocol === 'anthropic') {
+    const native = [];
+    for (const message of conversation) {
+      if (!tools.length) { native.push(message); continue; }
+      if (message.role === 'tool') {
+        const block = { type: 'tool_result', tool_use_id: message.tool_call_id, content: message.content };
+        const last = native.at(-1);
+        if (last?.role === 'user' && Array.isArray(last.content) && last.content.every(part => part.type === 'tool_result')) last.content.push(block);
+        else native.push({ role: 'user', content: [block] });
+      } else if (message.tool_calls?.length) native.push({ role: 'assistant', content: [
+        ...(message.content ? [{ type: 'text', text: message.content }] : []),
+        ...message.tool_calls.map(call => ({ type: 'tool_use', id: call.id, name: call.function.name, input: JSON.parse(call.function.arguments) })),
+      ] });
+      else native.push({ role: message.role, content: message.content });
+    }
+    return { url: new URL(config.baseUrl + '/messages'), input: { model: config.model, system, messages: native, max_tokens: maxTokens, stream: false,
+      ...(tools.length ? { tools: tools.map(tool => ({ name: tool.function.name, description: tool.function.description || '', input_schema: tool.function.parameters })) } : {}) } };
+  }
+  if (config.protocol === 'gemini') {
+    const contents = [];
+    for (const message of conversation) {
+      if (message.role === 'tool') {
+        const part = { functionResponse: { name: message.name, response: { content: message.content } } };
+        const last = contents.at(-1);
+        if (last?.role === 'user' && last.parts.every(part => part.functionResponse)) last.parts.push(part);
+        else contents.push({ role: 'user', parts: [part] });
+      } else if (message.tool_calls?.length) contents.push({ role: 'model', parts: [
+        ...(message.content ? [{ text: message.content }] : []),
+        ...message.tool_calls.map(call => ({ functionCall: { name: call.function.name, args: JSON.parse(call.function.arguments) },
+          ...(call.thoughtSignature ? { thoughtSignature: call.thoughtSignature } : {}) })),
+      ] });
+      else contents.push({ role: message.role === 'assistant' ? 'model' : 'user', parts: [{ text: message.content }] });
+    }
+    return { url: new URL(config.baseUrl + '/models/' + encodeURIComponent(config.model.replace(/^models\//, '')) + ':generateContent'),
+      input: { systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { maxOutputTokens: maxTokens },
+        ...(tools.length ? { tools: [{ functionDeclarations: tools.map(tool => ({
+          name: tool.function.name, description: tool.function.description || '', parametersJsonSchema: tool.function.parameters,
+        })) }] } : {}) } };
+  }
+  const url = new URL(config.baseUrl + '/chat/completions');
+  const native = tools.length ? messages.map(message => {
+    if (message.role === 'tool') return { role: 'tool', content: message.content, tool_call_id: message.tool_call_id };
+    if (message.tool_calls?.length) return { role: 'assistant', content: message.content || null,
+      tool_calls: message.tool_calls.map(call => ({ id: call.id, type: 'function', function: call.function })) };
+    return message;
+  }) : messages;
+  const input = { model: config.model, messages: native, stream: false,
+    [['openai', 'minimax'].includes(config.preset) ? 'max_completion_tokens' : 'max_tokens']: maxTokens,
+    ...(tools.length ? { tools, tool_choice: 'auto' } : {}) };
   if (config.preset === 'minimax') input.reasoning_split = true;
   if (url.hostname === 'api.deepseek.com') input.thinking = { type: 'disabled' };
   return { url, input };
 }
 
-export function parseReply(config, data) {
+function parseTextReply(config, data) {
   if (!data || typeof data !== 'object') return { content: null, finishReason: null, usage: null };
   if (config.protocol === 'anthropic') {
     const u = data.usage;
@@ -68,4 +113,20 @@ export function parseReply(config, data) {
       finishReason: ({ STOP: 'stop', MAX_TOKENS: 'length' })[c?.finishReason], usage };
   }
   return { content: data.choices?.[0]?.message?.content, finishReason: data.choices?.[0]?.finish_reason, usage: parseUsage(data.usage) };
+}
+
+
+export function parseReply(config, data) {
+  const reply = parseTextReply(config, data);
+  let calls = [];
+  if (config.protocol === 'anthropic' && Array.isArray(data?.content)) calls = data.content.filter(block => block?.type === 'tool_use')
+    .map(block => ({ id: block.id, name: block.name, arguments: JSON.stringify(block.input) }));
+  else if (config.protocol === 'gemini' && Array.isArray(data?.candidates?.[0]?.content?.parts)) calls = data.candidates[0].content.parts.filter(part => part?.functionCall)
+    .map(part => ({ id: part.functionCall.id || 'call_gemini_' + randomBytes(10).toString('hex'),
+      name: part.functionCall.name, arguments: JSON.stringify(part.functionCall.args ?? {}),
+      ...(typeof part.thoughtSignature === 'string' ? { thoughtSignature: part.thoughtSignature } : {}) }));
+  else if (!['anthropic', 'gemini'].includes(config.protocol) && Array.isArray(data?.choices?.[0]?.message?.tool_calls)) calls = data.choices[0].message.tool_calls.map(call => ({
+    id: call?.id, name: call?.function?.name, arguments: call?.function?.arguments,
+  }));
+  return calls.length ? { ...reply, content: reply.content || '', finishReason: 'tool_calls', toolCalls: calls } : reply;
 }

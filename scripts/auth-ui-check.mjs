@@ -46,8 +46,7 @@ try {
   assert.equal(await page.getByRole("tab").count(), 3);
   assert.equal(await page.locator("#auth-account").inputValue(), "admin");
   await page.screenshot({ path: path.join(output, "login-account-desktop.png") });
-  assert.equal(await page.locator(".auth-social").count(), 3);
-  for (const social of await page.locator(".auth-social").all()) assert.equal(await social.isDisabled(), true);
+  assert.equal(await page.locator(".auth-social").count(), 0);
   await page.getByRole("button", { name: "忘记密码？", exact: true }).click();
   await page.getByRole("heading", { name: "找回密码", exact: true }).waitFor();
   await page.getByRole("heading", { name: "自助找回暂未开放", exact: true }).waitFor();
@@ -65,10 +64,10 @@ try {
   await page.keyboard.press("ArrowRight");
   assert.equal(await page.getByRole("tab", { name: "手机验证码", exact: true }).getAttribute("aria-selected"), "true");
   await page.screenshot({ path: path.join(output, "login-phone-desktop.png") });
-  await page.locator("#auth-phone").fill("13800000000");
-  await page.getByRole("button", { name: "获取验证码", exact: true }).click();
-  await page.getByRole("alert").filter({ hasText: "手机验证码登录暂未开通" }).waitFor();
-  assert.equal(await page.getByRole("button", { name: "获取验证码", exact: true }).isDisabled(), false);
+  assert.equal(await page.locator("#auth-phone").count(), 0);
+  await page.getByText("手机验证码登录暂未开通。", { exact: true }).waitFor();
+  await page.getByRole("button", { name: "使用账号密码", exact: true }).click();
+  await page.locator("#auth-account").waitFor();
   await page.getByRole("tab", { name: "邮箱密码", exact: true }).click();
   await page.screenshot({ path: path.join(output, "login-email-desktop.png") });
   await page.getByRole("button", { name: "去注册", exact: true }).click();
@@ -136,6 +135,7 @@ try {
     assert.equal(await page.locator('.topbar [data-action="new"]').count(), 0);
     assert.equal(await page.locator('.topbar [data-action="new-chat"]').count(), 0);
     assert.equal(await page.locator('#sidebar a[href="#tasks"]').innerText(), "历史对话");
+    assert.equal(await page.locator('#sidebar nav a[href="#home"]').innerText(), "信息收集与分析");
     assert.ok(await page.locator("#sidebar").evaluate(element => {
       const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
       const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
@@ -161,6 +161,22 @@ try {
     const breadcrumb = element.querySelector(".breadcrumb").getBoundingClientRect();
     return toggle.width > 0 && toggle.right <= breadcrumb.left;
   }), "The sidebar toggle must precede the workspace breadcrumb");
+  const pinnedGroup = page.locator("#chat-session-list .chat-pinned-group");
+  const pinnedConversation = pinnedGroup.locator('a[href="#chat/' + olderSessionId + '"]');
+  const pinSaved = page.waitForResponse(response => response.url().endsWith("/api/workspace") && response.request().method() === "PUT");
+  await page.locator('.chat-header summary[aria-label="会话操作"]').click();
+  await page.getByRole("button", { name: "置顶会话", exact: true }).click();
+  assert.ok((await pinSaved).ok());
+  assert.equal(await pinnedConversation.getAttribute("aria-current"), "page");
+  const chatLinks = page.locator("#chat-session-list a");
+  assert.equal(await chatLinks.count(), 2);
+  await page.locator("#chat-search").fill("椰风计划");
+  assert.equal(await chatLinks.count(), 1);
+  assert.equal(await pinnedConversation.count(), 1);
+  await page.locator("#chat-search").fill("暂无匹配的测试关键词");
+  assert.equal(await chatLinks.count(), 0);
+  await page.locator("#chat-search").fill("");
+  assert.equal(await chatLinks.count(), 2);
   const expandedWidth = await page.locator(".workspace").evaluate(element => element.clientWidth);
   await page.locator("#message-input").fill("侧边栏切换保留的草稿");
   const messageBefore = await page.locator("#messages").innerText();
@@ -168,7 +184,7 @@ try {
     element.scrollTop = 0;
     return element.scrollTop;
   });
-  await page.screenshot({ path: path.join(output, "sidebar-expanded-desktop.png") });
+  await page.screenshot({ path: path.join(output, "sidebar-expanded-desktop.png"), style: "#toast { visibility: hidden }" });
   await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
   await waitDesktopSidebar(false);
   assert.ok(await page.locator(".workspace").evaluate(element => element.clientWidth) > expandedWidth + 180, "Collapsing the sidebar must release its width");
@@ -182,7 +198,13 @@ try {
     await page.keyboard.press("Tab");
     assert.equal(await page.locator("#sidebar").evaluate(element => element.contains(document.activeElement)), false, "Collapsed links must leave the keyboard focus order");
   }
-  await page.screenshot({ path: path.join(output, "sidebar-collapsed-desktop.png") });
+  await page.screenshot({ path: path.join(output, "sidebar-collapsed-desktop.png"), style: "#toast { visibility: hidden }" });
+  await page.locator("#message-input").focus();
+  await page.keyboard.press("Control+Shift+S");
+  await waitDesktopSidebar(true);
+  assert.equal(await page.locator("#message-input").evaluate(element => element === document.activeElement), true);
+  await page.keyboard.press("Control+Shift+S");
+  await waitDesktopSidebar(false);
   await page.locator("#message-input").fill("");
   await page.evaluate(() => { location.hash = "#tasks"; });
   await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
@@ -227,8 +249,19 @@ try {
 
   await page.goto(base + "/#home");
   await assertNavigation();
+  assert.equal(await page.locator("#chat-session-list, #sidebar-search").count(), 0);
+  const syncedPin = (await (await context.request.get(base + "/api/workspace")).json()).state.sessions.find(session => session.id === olderSessionId);
+  assert.equal(syncedPin.pinned, true);
+  await page.getByRole("heading", { name: "信息收集与分析", exact: true }).waitFor();
   await page.screenshot({ path: path.join(output, "navigation-home-desktop.png") });
-  await page.locator("#message-input").fill("保留首页未发送草稿");
+  await page.locator('#sidebar a[href="#todo"]').click();
+  await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
+  assert.equal(await page.locator('#sidebar a[href="#todo"]').getAttribute("aria-current"), "page");
+  await page.screenshot({ path: path.join(output, "sidebar-navigation-desktop.png") });
+  await page.goto(base + "/#chat/" + olderSessionId);
+  await page.locator("#messages .message").nth(3).waitFor();
+  await pinnedConversation.waitFor();
+  await page.locator("#message-input").fill("保留历史会话未发送草稿");
   await page.locator("#sidebar .sidebar-new-chat").click();
   await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
   assert.equal(await page.locator("#message-input").inputValue(), "");
@@ -236,9 +269,9 @@ try {
   await page.locator("#sidebar .sidebar-new-chat").click();
   await page.waitForFunction(() => document.activeElement?.id === "message-input");
   assert.equal(await page.locator("#message-input").inputValue(), "");
-  await page.locator('#sidebar .nav-link[href="#home"]').click();
-  await page.waitForFunction(() => location.hash === "#home" && document.querySelector("#message-input")?.form.dataset.draft === "home");
-  assert.equal(await page.locator("#message-input").inputValue(), "保留首页未发送草稿");
+  await pinnedConversation.click();
+  await page.waitForFunction(id => document.querySelector("#message-input")?.form.dataset.draft === id, olderSessionId);
+  assert.equal(await page.locator("#message-input").inputValue(), "保留历史会话未发送草稿");
   await page.locator("#message-input").fill("");
   await page.locator('#sidebar a[href="#tasks"]').click();
   await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
@@ -255,7 +288,7 @@ try {
   assert.equal(await historyLinks.count(), 2);
   await page.screenshot({ path: path.join(output, "navigation-history-desktop.png") });
   await page.locator('#history-results a[href="#chat/' + olderSessionId + '"]').click();
-  await page.getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
+  await page.locator("#messages").getByText("椰风计划只存在于消息正文，请补充执行步骤。", { exact: true }).waitFor();
   assert.equal(await page.locator("#messages .message").count(), 4);
   await page.locator('#sidebar a[href="#tasks"]').click();
   const readyDownload = page.waitForEvent("download");
@@ -338,50 +371,40 @@ try {
   await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
   assert.equal(await page.locator(".todo-item").count(), 2);
   assert.equal(await page.locator(".todo-item.is-done").count(), 1);
+  assert.equal(await page.getByRole("progressbar", { name: "完成进度" }).getAttribute("value"), "1");
   await page.screenshot({ path: path.join(output, "features-tasks-desktop.png") });
+
+  await page.goto(base + "/#knowledge");
+  await page.getByRole("heading", { name: "知识库", exact: true }).waitFor();
+  await page.locator("#file-input").setInputFiles({ name: "协作资料.txt", mimeType: "text/plain", buffer: Buffer.from("可用于对话的资料正文") });
+  const documentCard = page.locator(".document-card").filter({ hasText: "协作资料.txt" });
+  await documentCard.getByRole("heading", { name: "协作资料.txt", exact: true }).waitFor();
+  await documentCard.locator("summary").focus();
+  await page.keyboard.press("Enter");
+  assert.equal(await documentCard.getByRole("button", { name: "编辑标签", exact: true }).isVisible(), true);
+  await page.keyboard.press("Escape");
+  assert.equal(await documentCard.locator("details").evaluate(element => element.open), false);
+  assert.equal(await documentCard.locator("summary").evaluate(node => node === document.activeElement), true);
+  await page.screenshot({ path: path.join(output, "workbench-knowledge-desktop.png") });
+  await documentCard.getByRole("button", { name: "查看", exact: true }).click();
+  assert.match(await page.locator(".preview-text").innerText(), /可用于对话/);
+  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
+
 
   await page.locator('#sidebar a[href="#plugins"]').click();
   await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
-  assert.equal(await page.locator(".plugin-card").count(), 3);
-  const statsCard = page.locator('[data-tool-id="text-stats"]');
-  await statsCard.getByRole("switch", { name: "文本统计", exact: true }).click();
-  assert.equal(await statsCard.getByRole("switch").getAttribute("aria-checked"), "false");
-  assert.equal(await statsCard.getByRole("button", { name: "使用工具", exact: true }).isDisabled(), true);
-  await waitWorkspace(state => !state.settings.enabledTools?.includes("text-stats"));
-  await page.reload({ waitUntil: "networkidle" });
-  await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
-  assert.equal(await statsCard.getByRole("switch").getAttribute("aria-checked"), "false");
-  await statsCard.getByRole("switch").click();
-  await statsCard.getByRole("button", { name: "使用工具", exact: true }).click();
-  await page.locator("#tool-text").fill("A🙂 中\n\n第二行");
-  assert.equal(await page.locator('[data-stat="characters"]').innerText(), "9");
-  assert.equal(await page.locator('[data-stat="nonWhitespace"]').innerText(), "6");
-  assert.equal(await page.locator('[data-stat="lines"]').innerText(), "3");
-  assert.equal(await page.locator('[data-stat="paragraphs"]').innerText(), "2");
+  assert.equal(await page.locator(".plugin-catalog-card").count(), 2);
+  await page.getByRole("heading", { name: "连接插件", exact: true }).waitFor();
+  assert.equal(await page.getByText("内置工具", { exact: true }).count(), 0);
+  assert.equal((await (await context.request.get(base + "/api/plugins")).json()).connections.length, 0);
+  await page.locator('[data-action="plugin-connect-github"]').click();
+  await page.locator('[name="token"]').waitFor();
+  assert.equal(await page.locator('[name="token"]').getAttribute("type"), "password");
   await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
-  await page.locator('[data-tool-id="workspace-search"]').getByRole("button", { name: "使用工具", exact: true }).click();
-  await page.locator("#global-search").fill("海风待办");
-  assert.equal(await page.locator('.search-result[data-kind="todo"]').count(), 1);
-  await page.locator('.search-result[data-kind="todo"]').click();
-  assert.equal(await page.locator('#todo-form input[name="title"]').inputValue(), "规划新版本 · 已更新");
-  await page.getByRole("button", { name: "取消", exact: true }).click();
-  await page.locator('[data-tool-id="data-export"]').getByRole("button", { name: "使用工具", exact: true }).click();
-  const featureDownloadReady = page.waitForEvent("download");
-  await page.getByRole("button", { name: "导出 JSON 备份", exact: true }).click();
-  const featureDownload = await featureDownloadReady;
-  assert.equal(featureDownload.suggestedFilename(), "智作台-工作空间备份.json");
-  const featureBackup = JSON.parse(await readFile(await featureDownload.path(), "utf8"));
-  assert.equal(featureBackup.todos.length, 2);
-  assert.equal(featureBackup.sessions.length, 2);
-  assert.ok(featureBackup.settings.enabledTools.includes("text-stats"));
-  await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
-  await statsCard.getByRole("switch").click();
-  await waitWorkspace(state => !state.settings.enabledTools.includes("text-stats"));
   await page.screenshot({ path: path.join(output, "features-plugins-desktop.png") });
 
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
-  assert.equal(await page.locator("#sidebar .profile").count(), 0);
   assert.equal(await page.locator('#sidebar a[href="#settings"]').count(), 1);
   assert.equal(await page.locator("#sidebar a").last().getAttribute("href"), "#settings");
   await page.locator('#sidebar a[href="#settings"]').click();
@@ -401,7 +424,7 @@ try {
     await page.getByRole("heading", { name: "登录其他账号", exact: true }).waitFor();
     assert.equal(await page.locator("#auth-account").inputValue(), "");
   };
-  await page.goto(base + "/#home");
+  await page.goto(base + "/#chat");
   await page.locator("#message-input").fill("账号切换前保留的未发送内容");
   await page.goto(base + "/#settings");
   await page.getByRole("button", { name: "添加其他账号登录", exact: true }).click();
@@ -409,7 +432,7 @@ try {
   assert.equal(await modal.evaluate(element => element.open), false);
   await page.getByRole("button", { name: "退出当前账号", exact: true }).click();
   assert.equal((await status()).user.account, "admin");
-  await page.goto(base + "/#home");
+  await page.goto(base + "/#chat");
   assert.equal(await page.locator("#message-input").inputValue(), "账号切换前保留的未发送内容");
   await page.locator("#message-input").fill("");
   await addAccount();
@@ -466,16 +489,16 @@ try {
   assert.equal(await page.getByRole("heading", { name: "Bob 的独立提示词", exact: true }).count(), 0);
   const returnedFeatures = await (await context.request.get(base + "/api/workspace")).json();
   assert.equal(returnedFeatures.state.todos.length, 2);
-  assert.ok(!returnedFeatures.state.settings.enabledTools.includes("text-stats"));
+  assert.equal((await (await context.request.get(base + "/api/plugins")).json()).connections.length, 0);
   await page.setViewportSize({ width: 1024, height: 900 });
   await page.goto(base + "/#home");
   assert.equal(await page.getByText("我的工作空间", { exact: true }).count(), 0);
-  assert.ok(await page.locator(".side-panel").evaluate(element => {
-    const note = element.querySelector(".note-card").getBoundingClientRect();
-    return Math.abs(note.width - element.getBoundingClientRect().width) < 1;
-  }), "Moving workspace statistics must not leave an empty tablet column");
+  assert.ok(await page.locator(".intel-grid").evaluate(element => {
+    const sections = Array.from(element.children, section => section.getBoundingClientRect());
+    return sections.length === 2 && sections[0].top === sections[1].top && sections[0].right < sections[1].left;
+  }), "The intelligence feed and analysis should share the tablet layout");
   assert.ok(await page.locator("#sidebar").evaluate(element => {
-    const link = element.querySelector(".sidebar-settings").getBoundingClientRect();
+    const link = element.querySelector('a[href="#settings"]').getBoundingClientRect();
     const menu = element.getBoundingClientRect();
     return link.left >= menu.left && link.right <= menu.right;
   }));
@@ -498,14 +521,14 @@ try {
     assert.equal(await page.locator(".workspace").evaluate(element => element.inert), false);
     assert.equal(await page.locator(".main").evaluate(element => element.inert), true);
     assert.equal(await page.locator(".topbar-tools").evaluate(element => element.inert), true);
-    assert.ok(await page.locator(".topbar").evaluate(element => {
-      const toggle = element.querySelector("[data-menu-button]").getBoundingClientRect();
+    assert.ok(await page.evaluate(() => {
+      const toggle = document.querySelector("[data-menu-button]").getBoundingClientRect();
       const sidebar = document.querySelector("#sidebar").getBoundingClientRect();
       return toggle.bottom <= sidebar.top && toggle.left >= 0;
     }), "The mobile toggle must remain above the expanded drawer");
     await page.locator("[data-menu-button]").focus();
     await page.keyboard.press("Tab");
-    assert.equal(await page.locator(".brand").evaluate(element => element === document.activeElement), true);
+    assert.equal(await page.locator("#sidebar .brand").evaluate(element => element === document.activeElement), true);
     await page.keyboard.press("Shift+Tab");
     assert.equal(await page.locator("[data-menu-button]").evaluate(element => element === document.activeElement), true);
     await page.getByRole("button", { name: "收起侧边栏", exact: true }).click();
@@ -523,13 +546,12 @@ try {
       const menu = document.querySelector("#sidebar").getBoundingClientRect();
       return menu.left >= -0.5 && menu.right <= innerWidth + 1;
     });
-    await page.screenshot({ path: path.join(output, "sidebar-open-mobile-" + width + ".png") });
+    await page.mouse.move(width - 8, 120);
+    await page.screenshot({ path: path.join(output, "sidebar-open-mobile-" + width + ".png"), style: "#toast { visibility: hidden }" });
     assert.ok(await page.locator("#sidebar").evaluate(element => {
-      const settings = element.querySelector(".sidebar-settings").getBoundingClientRect();
-      const start = element.querySelector(".sidebar-new-chat").getBoundingClientRect();
-      const home = element.querySelector('a.nav-link[href="#home"]').getBoundingClientRect();
-      return !element.querySelector(".local-card") && settings.bottom <= innerHeight + 1 && settings.bottom >= innerHeight - 35 && start.bottom <= home.top;
-    }), "Settings must remain at the bottom and new conversation above Home");
+      const settings = element.querySelector('a[href="#settings"]').getBoundingClientRect();
+      return settings.bottom <= innerHeight + 1 && settings.bottom >= innerHeight - 35;
+    }), "Settings must remain at the bottom of the sidebar");
     assert.equal(await page.locator("#sidebar a").last().getAttribute("href"), "#settings");
     await page.screenshot({ path: path.join(output, "navigation-menu-mobile-" + width + ".png") });
     await page.locator('#sidebar a[href="#settings"]').click();
@@ -545,7 +567,10 @@ try {
     await page.waitForFunction(() => location.hash === "#chat" && document.querySelector("#message-input")?.form.dataset.draft === "new" && document.activeElement?.id === "message-input");
     assert.equal(await page.locator("#message-input").inputValue(), "");
     assert.equal(await page.locator("body").evaluate(element => element.classList.contains("sidebar-open")), false);
+    await page.getByRole("button", { name: "成员", exact: true }).click();
+    await page.locator("#chat-members-panel").waitFor();
     await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
+    await page.locator("#chat-members-panel").waitFor({ state: "hidden" });
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await page.locator('#sidebar a[href="#tasks"]').click();
     await page.getByRole("heading", { name: "历史对话", exact: true }).waitFor();
@@ -563,12 +588,38 @@ try {
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
     await page.locator('#sidebar a[href="#plugins"]').click();
     await page.getByRole("heading", { name: "插件", exact: true }).waitFor();
-    assert.equal(await page.locator(".plugin-card").count(), 3);
+    assert.equal(await page.locator(".plugin-catalog-card").count(), 2);
     assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), "Plugins must fit mobile width");
     await page.screenshot({ path: path.join(output, "features-plugins-mobile-" + width + ".png") });
+    for (const [route, heading] of [["home", "信息收集与分析"], ["prompts", "提示词库"], ["knowledge", "知识库"]]) {
+      await page.goto(base + "/#" + route);
+      await page.getByRole("heading", { name: heading, exact: true }).waitFor();
+      assert.ok(await page.locator(".main").evaluate(element => element.scrollWidth <= element.clientWidth), route + " must fit mobile width " + width);
+      if (width === 320) await page.screenshot({ path: path.join(output, "workbench-" + route + "-mobile-320.png"), fullPage: true });
+    }
 
   }
   await page.setViewportSize({ width: 1440, height: 960 });
+  const selectTheme = async name => {
+    await page.locator('#sidebar a[href="#settings"]').click();
+    const saved = page.waitForResponse(response => response.url().endsWith("/api/workspace") && response.request().method() === "PUT");
+    await page.getByRole("button", { name, exact: true }).click();
+    assert.ok((await saved).ok());
+  };
+  await selectTheme("深色");
+  await page.goto(base + "/#chat/" + olderSessionId);
+  await page.locator("#messages .message").nth(3).waitFor();
+  assert.equal(await page.locator("body").getAttribute("data-theme"), "dark");
+  await page.screenshot({ path: path.join(output, "sidebar-dark-desktop.png"), style: "#toast { visibility: hidden }" });
+  await selectTheme("浅色");
+  await page.goto(base + "/#chat/" + olderSessionId);
+  await page.locator("#messages .message").nth(3).waitFor();
+  const unpinSaved = page.waitForResponse(response => response.url().endsWith("/api/workspace") && response.request().method() === "PUT");
+  await page.locator('.chat-header summary[aria-label="会话操作"]').click();
+  await page.getByRole("button", { name: "取消置顶", exact: true }).click();
+  assert.ok((await unpinSaved).ok());
+  assert.equal(await pinnedGroup.count(), 0);
+  assert.equal(await page.locator('#chat-session-list a[href="#chat/' + olderSessionId + '"]').count(), 1);
   await logout();
   for (const width of [390, 320]) {
     await page.setViewportSize({ width, height: 844 });
@@ -583,9 +634,9 @@ try {
     await page.getByRole("button", { name: "去登录", exact: true }).click();
   }
   assert.deepEqual(errors, []);
-  console.log("Sidebar toggle passed: header placement, desktop width recovery, retained messages/draft/scroll, reload and route persistence, keyboard controls, storage fallback, responsive preference isolation, and mobile toggle/backdrop/Escape/focus handling.");
-  console.log("Task and built-in tool checks passed: navigation order, help relocation, create/edit/complete/filter/delete, Unicode statistics, tool toggles, JSON backup, reload and account isolation.");
-  console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, disabled social providers and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
+  console.log("Sidebar verification passed: restored single-column navigation, complete desktop collapse, shortcuts, retained drafts, mobile drawer focus, and searchable pinned conversations inside chat.");
+  console.log("Task and plugin catalog checks passed: navigation order, help relocation, create/edit/complete/filter/delete, real connection entry, masked credentials, empty account catalog and mobile layouts.");
+  console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, clear unavailable SMS state and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");
 } finally {
   if (browser) await browser.close();
   if (child.exitCode === null && child.signalCode === null) { const stopped = once(child, "exit"); child.kill(); await stopped; }

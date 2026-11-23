@@ -24,16 +24,10 @@
 .auth-story::before { left: -190px; bottom: -164px; background: #ffffff78; transform: rotate(14deg); }
 .auth-story::after { left: -45px; bottom: -216px; background: #a8caff38; transform: rotate(-17deg); }
 .auth-brand { display: flex; align-items: center; gap: 11px; width: fit-content; color: #1c365f; font-size: 20px; font-weight: 750; letter-spacing: 1px; }
-.auth-brand small { display: block; margin-top: 3px; color: #8096b8; font-size: 9px; font-weight: 500; letter-spacing: 1.4px; }
 .auth-logo { display: inline-flex; align-items: center; justify-content: center; width: 42px; height: 42px; flex: 0 0 auto; border: 1px solid #ffffff75; border-radius: 13px; background: linear-gradient(145deg, #5c9bff, #2368fa 80%); box-shadow: 0 6px 14px #3d7df12b, inset 0 1px 1px #ffffff80; color: #fff; font-size: 24px; font-weight: 700; }
 .auth-story-content { display: flex; flex: 1; flex-direction: column; justify-content: center; align-items: center; padding: 14px 0 28px; text-align: center; }
 .auth-visual { width: 340px; max-width: calc(100% + 24px); margin: -2px -12px 10px; }
 .auth-illustration { display: block; width: 100%; height: auto; }
-.auth-story-copy h2 { margin: 0 0 13px; color: #20365d; font-size: 25px; font-weight: 750; line-height: 1.55; letter-spacing: .4px; }
-.auth-story-copy p { margin: 0; color: #5c7292; font-size: 12px; line-height: 1.9; letter-spacing: .2px; }
-.auth-story-footer { display: flex; justify-content: center; align-items: center; gap: 13px; margin: 0; color: #7d95b8; font-size: 10px; white-space: nowrap; }
-.auth-story-footer span { display: flex; align-items: center; gap: 4px; }
-.auth-story-footer svg { width: 12px; height: 12px; }
 .auth-panel { display: flex; flex-direction: column; min-width: 0; padding: 38px 60px 25px; background: linear-gradient(135deg, #fff, #fff 70%, #fafcff); }
 .auth-mobile-brand { display: none; }
 .auth-heading { margin-bottom: 21px; }
@@ -75,16 +69,8 @@
 .auth-submit:hover { filter: brightness(1.04); box-shadow: 0 7px 18px #2470ff35; }
 .auth-submit:disabled { opacity: .65; cursor: wait; }
 .auth-submit svg { width: 16px; height: 16px; }
-.auth-other { margin-top: 19px; }
-.auth-divider { display: flex; align-items: center; gap: 12px; margin: 0 0 12px; color: #a0adc1; font-size: 10px; line-height: 17px; }
-.auth-divider::before, .auth-divider::after { flex: 1; height: 1px; background: #e7edf7; content: ""; }
-.auth-socials { display: flex; justify-content: center; gap: 19px; }
-.auth-social { display: grid; place-items: center; width: 39px; height: 36px; padding: 7px; border: 1px solid #e0e8f5; border-radius: 12px; background: #fff; opacity: .65; cursor: not-allowed; }
-.auth-social svg { display: block; width: 20px; height: 20px; }
-.auth-social-note { margin: 7px 0 0; color: #7b8ba5; font-size: 10px; line-height: 16px; text-align: center; }
 .auth-switch { display: flex; align-items: center; justify-content: center; gap: 5px; margin: 17px 0 0; color: #8393ad; font-size: 11px; line-height: 20px; }
 .auth-switch button { font-weight: 650; }
-.auth-panel-footer { margin: auto 0 0; padding-top: 21px; color: #afbbcd; font-size: 9px; line-height: 18px; text-align: center; }
 .auth-register .auth-panel { padding-top: 32px; }
 .auth-register .auth-heading { margin-bottom: 23px; }
 .auth-register .auth-fields { gap: 12px; }
@@ -92,19 +78,16 @@
 .auth-register .auth-input-wrap > svg { top: 13px; }
 .auth-register .auth-eye { top: 5px; }
 .auth-register .auth-submit { margin-top: 17px; }
-.auth-register-note { margin: 13px 0 0; color: #93a1b7; font-size: 10px; line-height: 1.9; }
 .auth-recovery .auth-panel { justify-content: center; padding-bottom: 38px; }
 .auth-recovery-card { margin: 8px 0 13px; padding: 24px; border: 1px solid #e0eaff; border-radius: 14px; background: #f7faff; }
 .auth-recovery-card > svg { width: 28px; height: 28px; color: #5d92f4; }
 .auth-recovery-card h2 { margin: 14px 0 10px; color: #405b84; font-size: 16px; line-height: 1.6; }
 .auth-recovery-card p { margin: 0; color: #8396b2; font-size: 12px; line-height: 1.9; }
-.auth-recovery .auth-panel-footer { flex-grow: 0; margin-top: 20px; }
 .server-access button:focus-visible, .auth-remember input:focus-visible { outline: 2px solid #91b3ff; outline-offset: 3px; }
 .server-access .auth-submit:focus-visible { outline: 3px solid #b8d0ff; outline-offset: 3px; }
 @media (max-width: 1000px) {
   .auth-panel { padding-left: 40px; padding-right: 40px; }
   .auth-story { padding-left: 26px; padding-right: 26px; }
-  .auth-story-copy h2 { font-size: 23px; }
 }
 @media (max-width: 800px) {
   .server-access { width: 450px; max-width: calc(100vw - 28px); max-height: calc(100dvh - 28px); border-radius: 20px; }
@@ -120,8 +103,6 @@
   .auth-tabs button { font-size: 11px; }
   .auth-fields { gap: 14px; }
   .auth-input-wrap input { font-size: 12px; }
-  .auth-other { margin-top: 18px; }
-  .auth-panel-footer { padding-top: 18px; font-size: 8px; }
   .auth-register .auth-mobile-brand { margin-bottom: 22px; }
   .auth-recovery-card { padding: 22px; }
 }
@@ -138,3 +119,23 @@
 }
 
 .auth-cancel-return { margin: 16px 0 0; text-align: center; font-size: 12px; line-height: 1.8; }
+
+
+.auth-layout { min-height: 510px; }
+.auth-story-content { padding: 12px 0; }
+.auth-panel, .auth-register .auth-panel, .auth-recovery .auth-panel { justify-content: center; padding-block: 38px; }
+.auth-heading h1 { margin-bottom: 0; }
+.auth-tabs { gap: 4px; padding: 4px; border: 0; border-radius: 10px; background: #f1f5fc; }
+.auth-tabs button { min-height: 41px; padding: 7px 4px; border-radius: 7px; color: #586a85; }
+.auth-tabs button[aria-selected="true"] { background: white; box-shadow: 0 1px 4px #2e426b17; }
+.auth-tabs button[aria-selected="true"]::after { content: none; }
+.auth-method-panel { display: grid; gap: 11px; justify-items: start; padding: 16px; border: 1px solid #dfe7f5; border-radius: 10px; color: #536788; }
+.auth-method-panel p { margin: 0; font-size: 13px; }
+.auth-field-hint { color: #536788; font-size: 11px; }
+.server-auth-error:empty { display: none; }
+.auth-form .auth-submit { margin-top: 16px; }
+.auth-switch { margin-top: 17px; }
+@media (max-width: 800px) {
+  .auth-layout { min-height: 0; }
+  .auth-panel, .auth-register .auth-panel, .auth-recovery .auth-panel { padding-block: 24px; }
+}

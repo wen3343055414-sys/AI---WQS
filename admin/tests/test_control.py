@@ -105,10 +105,51 @@ class ControlTests(unittest.TestCase):
         self.assertEqual(current["lastBackup"], "2026-11-02T01:00:00+00:00")
         self.assertEqual(current["sha"], self.current["sha"])
 
+    def test_update_reports_the_revision_that_actually_runs(self):
+        self.assertEqual(self.execute("update")["message"], "检查完成，当前运行 aaaaaaaaaaaa。")
+        self.service.update = lambda: self.service.current_path.write_text(
+            json.dumps({"sha": "b" * 40, "verification": "pending-admin"})
+        )
+        self.assertEqual(
+            self.execute("update")["message"],
+            "工作台已更新至 bbbbbbbbbbbb。管理服务正在切换。",
+        )
+
     def test_rollback_without_previous_version_does_not_modify_service(self):
         with self.assertRaisesRegex(RuntimeError, "上一运行版本"):
             self.execute("rollback")
         self.assertNotIn(("rollback",), self.events)
+
+    def test_deferred_updates_never_claim_a_completed_remote_check(self):
+        for deadline in (1795407836, None, float('inf'), 'invalid'):
+            with self.subTest(deadline=deadline):
+                self.service.update = lambda: {'status': 'deferred', 'retryAt': deadline}
+                result = self.execute('update')
+                self.assertEqual(result['status'], 'deferred')
+                self.assertIn('本次尚未完成远端检查', result['message'])
+                self.assertNotIn('检查完成', result['message'])
+                self.assertNotIn('已更新', result['message'])
+                self.assertEqual(json.loads(self.service.current_path.read_text()), self.current)
+                self.assertEqual(self.events[-1], ('unlock',))
+
+    def test_waiting_ci_and_blocked_releases_are_deferred_with_the_running_revision(self):
+        for status, description in (('waiting-ci', '等待 GitHub CI'), ('blocked', '等待修复提交')):
+            with self.subTest(status=status):
+                self.service.update = lambda: {'status': status, 'candidateSha': 'b' * 40}
+                result = self.execute('update')
+                self.assertEqual(result['status'], 'deferred')
+                self.assertIn(description, result['message'])
+                self.assertIn('当前运行 aaaaaaaaaaaa', result['message'])
+                self.assertNotIn('检查完成', result['message'])
+
+    def test_legacy_entry_cooldown_is_reported_during_the_first_entry_upgrade(self):
+        self.service.config = {'repository': 'example/workbench', 'branch': 'main'}
+        network = {**self.service.config, 'retryAt': control.dt.datetime.now().timestamp() + 3600}
+        file = self.directory / 'github-network.json'
+        file.write_text(json.dumps(network))
+        self.assertEqual(self.execute('update')['status'], 'deferred')
+        file.write_text(json.dumps({**network, 'branch': 'other'}))
+        self.assertEqual(self.execute('update')['status'], 'success')
 
     def test_unknown_action_never_acquires_lock_or_runs_commands(self):
         with self.assertRaisesRegex(ValueError, "不支持"):
