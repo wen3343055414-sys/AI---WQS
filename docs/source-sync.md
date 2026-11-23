@@ -22,6 +22,8 @@ git pull --ff-only origin main
 
 有未提交改动时先检查和保留，再整合远端变化，不丢弃或强制覆盖。从最新 `main` 创建任务分支或 worktree 开发，完成后通过 PR 审阅。其他分支没有合入 `main` 前不会在本机部署，不自动合并主分支。
 
+本地聊天应使用 Git 工作副本；云端选择绑定此仓库、基线为 `main` 的环境。每条云端任务有自己的工作空间，恢复历史聊天时仍需重新核对远端与分支，不能认为另一个聊天已经更新过，当前工作副本就会自动更新。并行聊天分别使用任务分支或 worktree，避免相互覆盖。[Codex Cloud 官方说明](https://learn.chatgpt.com/docs/cloud)及 [worktree 官方说明](https://learn.chatgpt.com/docs/environments/git-worktrees)描述了这些工作空间边界。
+
 ## 修改、验证与保存
 
 | 内容 | 源代码目录 |
@@ -46,6 +48,15 @@ Windows 另外运行 `python -m unittest discover -s tests -p 'test_windows_*.py
 
 验证后记录公开工作日志，检查差异并暂存实际源代码，创建 commit，推送当前任务分支并创建或更新 PR。以远端 SHA 和 CI 结果确认代码保存；正式部署还需 PR 合入 `main` 后该 SHA 的 push CI 成功。
 
+收尾核验分四步，报告时保留各自状态：
+
+1. **远端备份**：本次 commit 可在 GitHub 任务分支读取，与本地提交一致。云端工作空间中的未推送提交也需完成这一步。
+2. **主分支整合**：PR 已审阅合入 `main`，保留其他聊天已经合入的变更。只推送任务分支不会直接发布。
+3. **发布验收**：合并后 `main` 上同一 SHA 的 push CI 成功；任务分支或 PR 的 CI 不能代替它。
+4. **本机部署**：前端容器、后端容器和独立服务端都实际运行该提交，并且管理服务验证完成。网络等待、CI 等待和构建中均属于待部署，不能报告为已更新。
+
+源码包含 `public/`、`src/`、`admin/` 与部署脚本；只发布静态前端不能同步后端和模型服务。已经部署的配置、数据库、密钥和业务数据由原有运行目录与持久卷保留。普通聊天里没有落入仓库的代码块，须先在开发任务中实施、验证和推送，不扫描或执行历史聊天文字。
+
 ## Windows 更新与数据保留
 
 已安装运行目录由两个相邻目录构成，位置由安装配置决定：
@@ -69,7 +80,7 @@ Windows 另外运行 `python -m unittest discover -s tests -p 'test_windows_*.py
 
 `AI-WQS Local Server Update` 任务每分钟检查配置分支。只接受与 SHA 一致且 `.github/workflows/ci.yml` 的 **push** 工作流成功的提交；拒绝分支倒退或分叉。下载源码后先校验文件和归档路径，再构建新镜像。切换前备份工作台与管理数据库；使用原有 Docker 项目和持久卷。
 
-稳定入口 `ops/windows/updater-bootstrap.py` 同时负责 GitHub 网络访问，不修改已接受发布目录中的源码。维护已安装入口时先备份原入口、配置和任务定义，再将该文件复制为安装目录的 `update-windows.py`；任务名称、参数和业务数据目录保持原样。
+稳定入口 `ops/windows/updater-bootstrap.py` 同时负责 GitHub 网络访问，不修改已接受发布目录中的源码。已验证的原生发布在维护阶段原子刷新安装目录的 `update-windows.py`，后续进程从已接受版本加载核心与网络逻辑；待验证或旧版发布不会刷新入口。需要手动修复入口时，先备份原入口、配置和任务定义，再使用已接受版本的文件；任务名称、参数和业务数据目录保持原样。
 
 入口优先采用明确设置的代理环境变量；没有 HTTP/HTTPS/ALL 代理时读取 Windows 已启用的 Internet 代理设置，`NO_PROXY` 单独存在不会阻止读取系统代理。不改变系统代理、不读取或保存 GitHub 凭据。TLS 协商异常允许一次 TLS 1.2 重试，始终验证证书。
 
