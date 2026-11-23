@@ -435,7 +435,11 @@ export function beginChatPlan(state, sessionId, content, type, setup, models, me
   const session = state.sessions.find(item => item.id === result.sessionId);
   session.chatSetup = structuredClone(setup);
   if (mentionKey) session.messages.at(-1).mention = steps[0].name;
-  state.tasks[0].chatPlan = { mode, steps };
+  const task = state.tasks[0];
+  // Requests for a group turn are tracked per step. Older clients can still
+  // read the conversation without treating the entire turn as one request.
+  delete task.requestId;
+  task.chatPlan = { mode, steps };
   return result;
 }
 function historyThrough(session, userMessageId) {
@@ -490,7 +494,7 @@ export function chatPlanMessages(session, task, index) {
   if (step.role === "summary") {
     const contributions = task.chatPlan.steps.slice(0, -1).map(member => {
       const reply = session.messages.find(message => message.id === member.messageId);
-      if (member.status !== "success" || !reply) throw new Error("请先完成成员分工。");
+      if (member.status !== "success" || reply?.requestId !== member.requestId) throw new Error("请先完成成员分工。");
       return { label: `${member.name} · ${CHAT_ROLES[member.role]}`, content: reply.content };
     });
     const budget = Math.floor((47_000 - prompt.length) / contributions.length);

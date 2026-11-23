@@ -71,6 +71,7 @@ test('group replies use independent context, keep member order, and support a ta
   const setup = { ...team, mode: 'group' };
   const { sessionId, taskId } = beginChatPlan(state, '', 'Plan a launch', 'AI 对话', setup, models);
   const session = state.sessions[0], task = state.tasks[0];
+  assert.equal(task.requestId, undefined, 'older clients should not resume the whole group as a single request');
   const firstInput = chatPlanMessages(session, task, 0);
   assert.deepEqual(firstInput, chatPlanMessages(session, task, 1));
   assert.deepEqual(pendingChatSteps(task), [0, 1]);
