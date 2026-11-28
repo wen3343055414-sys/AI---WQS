@@ -25,7 +25,7 @@ const actions = {
   resume: ['恢复自动更新', '恢复每分钟一次的版本检查。'],
 };
 let csrf = '', setupRequired = false, authenticated = false, currentPage = 'overview';
-let report = null, refreshPending = false, logRequest = null, actionPending = false;
+let report = null, refreshPending = false, logRequest = null, logSnapshot = null, actionPending = false;
 const mobile = matchMedia('(max-width: 760px)');
 const menu = $('admin-menu'), sidebar = $('admin-sidebar');
 function setMenu(open, restoreFocus = false) {
@@ -127,7 +127,11 @@ async function enter() {
 $('auth-form').addEventListener('submit', async event => {
   event.preventDefault(); $('auth-error').textContent = '';
   const password = $('password').value;
-  if (setupRequired && password !== $('password-confirm').value) { $('auth-error').textContent = '两次输入的密码不一致。'; return; }
+  if (setupRequired && password !== $('password-confirm').value) {
+    $('auth-error').textContent = '两次输入的密码不一致。';
+    $('password-confirm').focus();
+    return;
+  }
   const submit = $('auth-submit'), label = submit.textContent;
   submit.disabled = true;
   submit.textContent = '正在登录…';
@@ -156,6 +160,12 @@ function navigate(page) {
 document.addEventListener('click', event => {
   const navigation = event.target.closest('[data-page]');
   if (navigation && navigate(navigation.dataset.page)) $('page-title').focus({ preventScroll: true });
+  const logs = event.target.closest('[data-log-source]');
+  if (logs) {
+    $('log-source').value = logs.dataset.logSource;
+    if (navigate('logs')) $('page-title').focus({ preventScroll: true });
+    return;
+  }
   const action = event.target.closest('[data-action]');
   if (action && !action.disabled) requestAction(action.dataset.action);
   const job = event.target.closest('[data-job]');
@@ -170,7 +180,8 @@ function renderServices(containers, detailed = false) {
     const type = healthy ? 'success' : container.state === 'running' ? 'warning' : 'neutral';
     const label = healthy ? '运行正常' : container.state === 'running' ? '健康检查中' : '已停止';
     const name = container.service === 'backend' ? '后端服务' : '前端代理';
-    return `<div class="service-row"><span class="service-symbol">${icon(container.service === 'backend' ? 'server' : 'grid')}</span><div class="service-name"><strong>${name}</strong>${detailed ? `<small title="${escape(container.image)}">${escape(container.image)}</small><small>${escape(container.ports || '仅容器内部访问')}</small>` : ''}</div><div class="service-stat"><strong>${escape(metric?.cpu || '—')}</strong>CPU 使用</div><div class="service-stat"><strong>${escape(metric?.memory?.split('/')[0].trim() || '—')}</strong>内存占用</div><span class="badge ${type}">${label}</span></div>`;
+    return `<div class="service-row"><span class="service-symbol">${icon(container.service === 'backend' ? 'server' : 'grid')}</span><div class="service-name"><strong>${name}</strong>${detailed ? `<small title="${escape(container.image)}">${escape(container.image)}</small><small>${escape(container.ports || '仅容器内部访问')}</small>` : ''}</div><div class="service-stat"><strong>${escape(metric?.cpu || '—')}</strong>CPU 使用</div><div class="service-stat"><strong>${escape(metric?.memory?.split('/')[0].trim() || '—')}</strong>内存占用</div><div class="service-status"><span class="badge ${type}">${label}</span>${detailed && ['backend', 'frontend'].includes(container.service)
+      ? `<button type="button" class="btn service-log" data-log-source="${container.service}" aria-label="查看${name}日志">查看日志</button>` : ''}</div></div>`;
   }).join('');
 }
 function renderJobs(jobs) {
@@ -196,6 +207,47 @@ function renderChart(cpu, timestamp) {
   $('chart-max').textContent = `${max}%`; $('chart-mid').textContent = `${(max / 2).toFixed(1)}%`;
   $('chart-start').textContent = date(cpuHistory[0].time, true);
 }
+const tableMarkup = new WeakMap();
+function updateTable(id, html) {
+  const table = $(id);
+  if (tableMarkup.get(table) === html) return;
+  const href = table.contains(document.activeElement) && document.activeElement.getAttribute('href');
+  table.innerHTML = html;
+  tableMarkup.set(table, html);
+  if (href) {
+    [...table.querySelectorAll('a[href]')].find(link => link.getAttribute('href') === href)?.focus({ preventScroll: true });
+  }
+}
+function renderBackups(files) {
+  const search = $('backup-search').value.trim().toLocaleLowerCase();
+  const rows = files.filter(file => !search || file.name.toLocaleLowerCase().includes(search));
+  updateTable('backup-table', rows.length ? rows.map(file => `<tr>
+    <td><span class="mono">${escape(file.name)}</span></td><td>${date(file.modifiedAt)}</td><td>${bytes(file.size)}</td>
+    <td class="right"><a href="/api/backups/${encodeURIComponent(file.name)}" download>${icon('download')}下载</a></td></tr>`).join('') :
+    `<tr><td colspan="4" class="empty">${search ? '没有匹配的备份文件' : '暂无可显示的备份文件'}</td></tr>`);
+}
+const auditTitles = {
+  login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份',
+  api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录',
+  api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型',
+  api_provider_delete: '删除模型连接', api_model_delete: '移除模型',
+};
+const auditResults = { success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断', deferred: '已暂缓' };
+function renderAudit(entries) {
+  const query = $('audit-search').value.trim().toLocaleLowerCase(), selected = $('audit-result').value;
+  const rows = entries.map(entry => ({
+    entry, title: actions[entry.action]?.[0] || auditTitles[entry.action] || entry.action,
+    label: auditResults[entry.result] || entry.result,
+  })).filter(({ entry, title, label }) => (selected === 'all' || entry.result === selected) &&
+    (!query || `${title} ${label} ${entry.detail || ''}`.toLocaleLowerCase().includes(query)));
+  updateTable('audit-table', rows.length ? rows.map(({ entry, title, label }) => {
+    const type = { success: 'success', failed: 'failed', deferred: 'warning' }[entry.result] || 'neutral';
+    return `<tr><td>${date(entry.time)}</td><td>${escape(title)}</td><td><span class="badge ${type}">${escape(label)}</span></td><td>${escape(entry.detail || '—')}</td></tr>`;
+  }).join('') : `<tr><td colspan="4" class="empty">${query || selected !== 'all' ? '没有匹配的操作记录' : '暂无操作记录'}</td></tr>`);
+}
+$('backup-search').addEventListener('input', () => { if (report) renderBackups(report.backups?.files || []); });
+$('audit-search').addEventListener('input', () => { if (report) renderAudit(report.audit); });
+$('audit-result').addEventListener('change', () => { if (report) renderAudit(report.audit); });
 function render() {
   const r = report, containers = r.containers || [], files = r.backups?.files || [];
   const running = containers.filter(c => c.state === 'running').length;
@@ -230,20 +282,28 @@ function render() {
   $('host-uptime').textContent = duration(r.host.uptimeSeconds); $('admin-uptime').textContent = duration(r.admin.uptimeSeconds);
   $('admin-details').innerHTML = [['访问地址', `127.0.0.1:${r.admin.port}`], ['进程 ID', r.admin.pid], ['管理服务内存', bytes(r.admin.memoryBytes)], ['连续运行', duration(r.admin.uptimeSeconds)]].map(([key, value]) => `<div><span>${key}</span><strong>${escape(value)}</strong></div>`).join('');
   $('backup-count').textContent = `${files.length} 份`; $('backup-size').textContent = bytes(files.reduce((sum, file) => sum + file.size, 0)); $('database-size').textContent = bytes(r.backups.databaseBytes);
-  $('backup-table').innerHTML = files.length ? files.map(file => `<tr><td><span class="mono">${escape(file.name)}</span></td><td>${date(file.modifiedAt)}</td><td>${bytes(file.size)}</td><td class="right"><a href="/api/backups/${encodeURIComponent(file.name)}" download>${icon('download')}下载</a></td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无可显示的备份文件</td></tr>';
+  renderBackups(files);
   $('backup-error').hidden = !r.backups.error; $('backup-error').textContent = r.backups.error || '';
   $('current-sha').textContent = r.deployment.sha?.slice(0, 12) || '尚未部署';
   if (/^[\w.-]+\/[\w.-]+$/.test(r.repository)) $('commit-link').href = `https://github.com/${r.repository}/commit/${r.deployment.sha}`;
   const detailRows = fields => fields.map(([key, value]) => `<div><dt>${key}</dt><dd>${escape(value)}</dd></div>`).join('');
   const containerVersion = service => {
     const container = containers.find(item => item.service === service && item.state === 'running');
-    return container?.image?.match(/:([a-f0-9]{40})(?:-models-v1)?$/)?.[1].slice(0, 12) || '—';
+    return container?.image?.match(/:([a-f0-9]{40})(?:-models-v1)?$/)?.[1];
   };
+  const front = containerVersion('frontend'), back = containerVersion('backend');
+  const adminVersion = /^[a-f0-9]{40}$/.test(r.admin.revision) ? r.admin.revision : undefined;
+  const versions = [front, back, adminVersion];
+  const deployed = r.deployment.sha;
+  const mismatch = Boolean(deployed) && versions.some(value => value && value !== deployed);
+  const complete = Boolean(deployed) && versions.every(Boolean);
+  badge($('version-consistency'), mismatch ? '运行版本不一致' : complete ? '运行版本一致' : '运行版本待核对',
+    mismatch ? 'warning' : complete ? 'success' : 'neutral');
   $('release-summary').innerHTML = detailRows([
     ['跟随分支', r.branch], ['上次部署', date(r.deployment.updatedAt)], ['上一版本', r.deployment.previous?.slice(0, 12) || '—'],
   ]);
   $('deployment-details').innerHTML = detailRows([
-    ['代码仓库', r.repository], ['前端容器版本', containerVersion('frontend')], ['后端容器版本', containerVersion('backend')],
+    ['代码仓库', r.repository], ['前端容器版本', front?.slice(0, 12) || '—'], ['后端容器版本', back?.slice(0, 12) || '—'],
     ['管理服务版本', r.admin.revision?.slice(0, 12) || '—'], ['部署项目', r.project], ['最近备份', date(r.deployment.lastBackup)],
   ]);
   const jobsMarkup = renderJobs(r.jobs);
@@ -251,7 +311,7 @@ function render() {
     const target = $(id);
     if (target.innerHTML !== jobsMarkup && !target.contains(document.activeElement)) target.innerHTML = jobsMarkup;
   }
-  $('audit-table').innerHTML = r.audit.length ? r.audit.map(entry => `<tr><td>${date(entry.time)}</td><td>${escape(actions[entry.action]?.[0] || ({ login: '管理后台登录', setup: '初始化管理后台', download: '下载数据库备份', api_settings_save: '保存 API 接口设置', api_connection_test: '检测模型目录', api_model_add: '添加模型', api_model_update: '更新模型', api_default_model: '设置默认模型', api_provider_delete: '删除模型连接', api_model_delete: '移除模型' })[entry.action] || entry.action)}</td><td><span class="badge ${entry.result === 'success' ? 'success' : entry.result === 'failed' ? 'failed' : entry.result === 'deferred' ? 'warning' : 'neutral'}">${({ success: '成功', failed: '未完成', started: '已开始', interrupted: '已中断', deferred: '已暂缓' })[entry.result] || entry.result}</span></td><td>${escape(entry.detail || '—')}</td></tr>`).join('') : '<tr><td colspan="4" class="empty">暂无操作记录</td></tr>';
+  renderAudit(r.audit);
   const busy = actionPending || r.jobs.some(job => job.status === 'running');
   document.querySelectorAll('[data-action]').forEach(button => {
     const action = button.dataset.action;
@@ -285,34 +345,59 @@ function renderModelUsage(usage) {
 async function refresh() {
   if (!authenticated || refreshPending) return;
   refreshPending = true; $('refresh').classList.add('spinning');
-  try { report = await api('/api/overview'); render(); }
+  try {
+    report = await api('/api/overview');
+    if (!authenticated) return;
+    render();
+    const last = $('admin-refreshed');
+    last.dateTime = report.updatedAt;
+    last.textContent = date(report.updatedAt, true);
+    last.hidden = false;
+  }
   catch (error) { $('connection-error').hidden = false; $('connection-error').textContent = error.message; }
   finally { refreshPending = false; $('refresh').classList.remove('spinning'); }
 }
 $('refresh').addEventListener('click', () => { refresh(); if (currentPage === 'websites') websiteUI.load(); });
+function renderLogs() {
+  if (!logSnapshot) return;
+  const output = $('log-output');
+  const query = $('log-query').value.trim().toLocaleLowerCase();
+  const rows = logSnapshot.text ? logSnapshot.text.trimEnd().split(/\r?\n/) : [];
+  const matches = query ? rows.filter(line => line.toLocaleLowerCase().includes(query)) : rows;
+  const text = query ? matches.join('\n') || '没有匹配的日志' : logSnapshot.text || '暂无日志';
+  if (output.textContent !== text) {
+    const previousTop = output.scrollTop;
+    const atEnd = output.scrollHeight - output.clientHeight - previousTop < 8;
+    output.textContent = text;
+    output.scrollTop = $('log-follow').checked && atEnd ? output.scrollHeight : previousTop;
+  }
+  const count = query ? `${matches.length} / ${rows.length} 行` : '';
+  $('log-updated').textContent = [date(logSnapshot.updatedAt), count, logSnapshot.error].filter(Boolean).join(' · ');
+}
 async function loadLogs() {
   if (!authenticated) return;
   logRequest?.abort();
   const request = new AbortController();
   logRequest = request;
-  const source = $('log-source').value;
-  const lines = $('log-lines').value;
-  const output = $('log-output');
+  const source = $('log-source').value, lines = $('log-lines').value, output = $('log-output');
+  const key = `${source}:${lines}`;
+  if (logSnapshot?.key !== key) {
+    logSnapshot = null;
+    output.textContent = '正在读取日志…';
+    $('log-updated').textContent = '';
+  }
   $('log-refresh').classList.add('spinning');
   output.setAttribute('aria-busy', 'true');
   try {
     const result = await api(`/api/logs?source=${encodeURIComponent(source)}&lines=${lines}`, { signal: request.signal });
-    if (logRequest !== request) return;
-    const previousTop = output.scrollTop;
-    const atEnd = output.scrollHeight - output.clientHeight - previousTop < 8;
-    const text = result.text || '暂无日志';
-    if (output.textContent !== text) {
-      output.textContent = text;
-      output.scrollTop = $('log-follow').checked && atEnd ? output.scrollHeight : previousTop;
-    }
-    $('log-updated').textContent = date(result.updatedAt);
+    if (logRequest !== request || !authenticated) return;
+    logSnapshot = { ...result, key };
+    renderLogs();
   } catch (error) {
-    if (logRequest === request && !request.signal.aborted) output.textContent = error.message;
+    if (logRequest === request && !request.signal.aborted) {
+      if (logSnapshot) { logSnapshot.error = '刷新失败，显示上次日志'; renderLogs(); }
+      else output.textContent = error.message;
+    }
   } finally {
     if (logRequest === request) {
       logRequest = null;
@@ -322,6 +407,7 @@ async function loadLogs() {
   }
 }
 for (const id of ['log-source', 'log-lines']) $(id).addEventListener('change', loadLogs);
+$('log-query').addEventListener('input', renderLogs);
 $('log-refresh').addEventListener('click', loadLogs);
 function requestAction(action) {
   if (!actions[action] || actionPending) return;

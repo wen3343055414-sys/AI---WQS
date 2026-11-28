@@ -72,6 +72,16 @@ try {
   await card.getByRole('button', { name: '查看工具', exact: true }).click();
   await page.locator('#plugin-tools-form').waitFor();
   assert.equal(await page.locator('.plugin-tool-row').count(), 2);
+  const repositoryTool = page.locator('[data-tool-name="get_repository"] input[type="checkbox"]');
+  const repositoryToolEnabled = await repositoryTool.isChecked();
+  const pluginToolSearch = page.locator('#plugin-tool-search');
+  await pluginToolSearch.fill('unknown-fixture-tool');
+  await page.locator('#plugin-tool-empty').waitFor();
+  assert.equal(await page.locator('.plugin-tool-row:visible').count(), 0);
+  await pluginToolSearch.fill('get_repository');
+  assert.equal(await page.locator('.plugin-tool-row:visible').count(), 1);
+  assert.equal(await repositoryTool.isChecked(), repositoryToolEnabled);
+  await pluginToolSearch.clear();
   await page.screenshot({ path: path.join(output, 'plugins-tools-desktop.png') });
   await page.locator('[data-tool-name="get_repository"]').getByRole('button', { name: '执行工具', exact: true }).click();
   await page.locator('#plugin-call-args').fill('{"owner":"actual-owner","repo":"actual-repo"}');

@@ -1,6 +1,10 @@
 import { STORAGE_KEY, validateState } from "./core.js";
 import { AuthDialog } from "./auth.js";
 
+const syncTime = new Intl.DateTimeFormat("zh-CN", {
+  month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit", timeZone: "Asia/Shanghai",
+});
+
 export class WorkspaceSync {
   constructor(callbacks) {
     Object.assign(this, { callbacks, mode: "connecting", authenticated: false, revision: 0, sequence: 0, version: "", pending: null, conflict: null, busy: false, authCycle: 0, switchingAccount: false, accountActionBusy: false, label: "正在连接" });
@@ -24,7 +28,11 @@ export class WorkspaceSync {
   }
   get canWrite() { return this.mode === "local" || this.authenticated; }
   get pendingKey() { return STORAGE_KEY + ".pending." + (this.identity || this.serverId + "." + (this.user?.id ?? "legacy")); }
-  status(label) { this.label = label; this.refreshStatus(); }
+  status(label) {
+    this.label = label;
+    if (label === "已同步到本机数据库") this.lastSyncedAt = new Date().toISOString();
+    this.refreshStatus();
+  }
   refreshStatus() {
     for (const element of document.querySelectorAll("[data-server-label]")) element.textContent = this.label;
     for (const indicator of document.querySelectorAll("[data-sync-indicator]")) {
@@ -33,6 +41,15 @@ export class WorkspaceSync {
       indicator.dataset.state = this.label === "已同步到本机数据库" ? "ready" : this.conflict ? "conflict" : "waiting";
     }
     for (const element of document.querySelectorAll("[data-server-version]")) element.textContent = this.version ? this.version.slice(0, 12) : "静态演示版";
+    for (const element of document.querySelectorAll("[data-server-synced-at]")) {
+      if (this.lastSyncedAt) {
+        element.dateTime = this.lastSyncedAt;
+        element.textContent = syncTime.format(new Date(this.lastSyncedAt));
+      } else {
+        element.removeAttribute("datetime");
+        element.textContent = "—";
+      }
+    }
     const banner = document.querySelector("#sync-conflict");
     if (banner) banner.hidden = !this.conflict;
     this.callbacks.onStatus?.(this);
@@ -65,12 +82,10 @@ export class WorkspaceSync {
     }
   }
   async connect() {
-    if (this.connecting) return;
+    if (this.connecting || this.busy || this.accountActionBusy) return;
     this.connecting = true;
     const cycle = ++this.authCycle;
     const previousIdentity = this.identity;
-    const previousUser = this.user?.id;
-    const inMemory = this.pending ? { state: structuredClone(this.pending), baseRevision: this.revision } : null;
     clearInterval(this.timer);
     try {
       const response = await fetch("/api/status", { credentials: "same-origin", cache: "no-store", signal: AbortSignal.timeout(5000) });
@@ -93,34 +108,36 @@ export class WorkspaceSync {
       this.identity = status.serverId + "." + status.user.id;
       if (previousIdentity !== this.identity) {
         document.body.classList.add("server-locked");
-        if (previousIdentity && inMemory) this.accountDrafts.set(previousIdentity, inMemory);
+        if (previousIdentity && this.pending) this.accountDrafts.set(previousIdentity, { state: structuredClone(this.pending), baseRevision: this.revision });
         this.pending = null;
         this.conflict = null;
+        this.lastSyncedAt = null;
         this.sequence++;
         clearTimeout(this.flushTimer);
       }
-      if (previousUser !== this.user.id) this.callbacks.onAccountChange?.(this.user);
+      if (previousIdentity !== this.identity) this.callbacks.onAccountChange?.(this.user);
       const snapshot = await this.request("/api/workspace");
       if (cycle !== this.authCycle) return;
       this.validateSnapshot(snapshot);
-      this.revision = snapshot.revision;
-      let queued = this.accountDrafts.get(this.identity) || (previousIdentity === this.identity ? inMemory : null);
+      let queued = this.pending ? { state: this.pending, baseRevision: this.revision } : this.accountDrafts.get(this.identity);
       if (!queued) { try { queued = JSON.parse(localStorage.getItem(this.pendingKey)); } catch {} }
       if (!queued && this.user.legacy) { try { queued = JSON.parse(localStorage.getItem(STORAGE_KEY + ".pending." + this.serverId)); } catch {} }
       if (queued && validateState(queued.state) && Number.isSafeInteger(queued.baseRevision)) {
+        this.revision = queued.baseRevision;
         this.pending = structuredClone(queued.state);
         this.sequence++;
         this.callbacks.onState(structuredClone(this.pending));
         if (queued.baseRevision !== snapshot.revision) { this.conflict = snapshot; this.status("有未同步修改，请处理版本冲突"); }
-        else { this.status("正在补发未同步修改"); await this.flush(); }
+        else { this.conflict = null; this.status("正在补发未同步修改"); await this.flush(true); }
       } else {
+        this.revision = snapshot.revision;
         let migrated;
         if (this.user.legacy && snapshot.revision === 0) { try { migrated = JSON.parse(localStorage.getItem(STORAGE_KEY)); } catch {} }
         if (migrated && validateState(migrated)) {
           this.callbacks.onState(migrated);
           this.enqueue(migrated);
-          await this.flush();
-          this.callbacks.onNotice?.("原有记录已迁入工作空间，旧缓存继续保留。");
+          await this.flush(true);
+          if (!this.pending) this.callbacks.onNotice?.("原有记录已迁入工作空间，旧缓存继续保留。");
         } else { this.callbacks.onState(snapshot.state); this.status("已同步到本机数据库"); }
       }
       if (cycle !== this.authCycle) return;
@@ -132,7 +149,10 @@ export class WorkspaceSync {
       else this.status("连接异常 · 等待重试");
       this.callbacks.onNotice?.(error.message, true);
       if (document.body.classList.contains("server-locked") && !this.dialog.open) this.showLogin(false);
-    } finally { this.connecting = false; }
+    } finally {
+      this.connecting = false;
+      this.scheduleFlush();
+    }
   }
   enqueue(state) {
     if (!this.authenticated) throw new Error("请先登录账号再保存。");
@@ -140,8 +160,12 @@ export class WorkspaceSync {
     this.sequence++;
     this.cachePending();
     this.status(this.conflict ? "版本冲突 · 当前修改已保留" : "正在保存到本机服务器");
+    this.scheduleFlush();
+  }
+  scheduleFlush(delay = 300) {
+    if (!this.pending || this.conflict || !this.authenticated || this.connecting) return;
     clearTimeout(this.flushTimer);
-    this.flushTimer = setTimeout(() => this.flush(), 300);
+    this.flushTimer = setTimeout(() => this.flush(), delay);
   }
   cachePending() {
     const draft = { state: this.pending, baseRevision: this.revision };
@@ -156,8 +180,8 @@ export class WorkspaceSync {
       if (this.user?.legacy) localStorage.removeItem(STORAGE_KEY + ".pending." + this.serverId);
     } catch {}
   }
-  async flush() {
-    if (this.busy || !this.pending || this.conflict || !this.authenticated) return;
+  async flush(duringConnect = false) {
+    if (this.busy || (this.connecting && !duringConnect) || !this.pending || this.conflict || !this.authenticated) return;
     this.busy = true;
     const sequence = this.sequence;
     const cycle = this.authCycle;
@@ -177,25 +201,27 @@ export class WorkspaceSync {
       else this.status("尚未同步 · 自动重试中");
     } finally {
       this.busy = false;
-      if (this.pending && !this.conflict && this.authenticated) this.flushTimer = setTimeout(() => this.flush(), 2500);
+      this.scheduleFlush(2500);
     }
   }
   async poll() {
-    if (!this.authenticated || this.busy || this.pending || this.conflict || this.switchingAccount || this.accountActionBusy) return;
+    if (!this.authenticated || this.busy || this.connecting || this.pending || this.conflict || this.switchingAccount || this.accountActionBusy) return;
     this.busy = true;
     const cycle = this.authCycle;
+    const sequence = this.sequence;
     try {
       const status = await this.request("/api/status");
       if (cycle !== this.authCycle) return;
       if (!status.authenticated || status.user?.id !== this.user?.id) { this.lock(); return; }
       if (status.serverId !== this.serverId) { document.body.classList.add("server-locked"); location.reload(); return; }
       if (status.version !== this.version) {
-        if (this.callbacks.canReload?.()) location.reload();
+        if (this.sequence === sequence && !this.pending && !this.accountDrafts?.size && this.callbacks.canReload?.()) location.reload();
         else this.callbacks.onVersion?.(status.version);
         return;
       }
+      if (this.sequence !== sequence || this.pending) return;
       const remote = await this.request("/api/workspace");
-      if (cycle !== this.authCycle) return;
+      if (cycle !== this.authCycle || this.sequence !== sequence || this.pending) return;
       this.validateSnapshot(remote);
       if (remote.revision !== this.revision) {
         if (this.callbacks.canApply?.() === false) { this.status("有新数据 · 编辑结束后同步"); return; }
@@ -207,7 +233,10 @@ export class WorkspaceSync {
       if (cycle !== this.authCycle) return;
       if (error.status === 401) this.lock();
       else this.status("连接暂时离线 · 保留当前内容");
-    } finally { this.busy = false; }
+    } finally {
+      this.busy = false;
+      this.scheduleFlush();
+    }
   }
   resolveConflict(useLocal) {
     if (!this.conflict || !this.pending) return;
@@ -250,6 +279,7 @@ export class WorkspaceSync {
     try {
       await this.request("/api/logout", { method: "POST" });
       this.authenticated = false;
+      this.lastSyncedAt = null;
       document.body.classList.add("server-locked");
       this.callbacks.onSignedOut?.();
       this.showLogin(false);

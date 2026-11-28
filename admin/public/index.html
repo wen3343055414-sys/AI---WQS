@@ -75,6 +75,7 @@
         <h1 id="page-title" tabindex="-1">服务器总览</h1>
       </div>
       <div class="top-actions">
+        <time id="admin-refreshed" class="admin-refresh-time" title="最近刷新" hidden></time>
         <button class="icon-btn" id="refresh" aria-label="刷新状态" title="刷新状态"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
         <button class="icon-btn" id="logout" aria-label="退出管理后台" title="退出管理后台"><svg aria-hidden="true"><use href="#i-exit"/></svg></button>
       </div>
@@ -187,6 +188,7 @@
               <label><input id="log-follow" type="checkbox" checked>自动刷新</label>
               <button id="log-refresh" class="icon-btn" aria-label="刷新日志" title="刷新日志"><svg aria-hidden="true"><use href="#i-refresh"/></svg></button>
             </div>
+            <label class="admin-search"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="log-query" type="search" maxlength="100" aria-label="筛选日志" placeholder="筛选日志"></label>
           </div>
           <pre id="log-output" class="log-output" tabindex="0" aria-label="日志内容">正在读取日志…</pre>
           <div class="panel-footer" id="log-updated"></div>
@@ -202,6 +204,7 @@
             <div><span>数据库大小</span><strong id="database-size">—</strong></div>
           </div>
           <div id="backup-error" class="notice inline-notice" role="status" hidden></div>
+          <div class="admin-table-controls"><label class="admin-search"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="backup-search" type="search" maxlength="100" aria-label="搜索备份文件" placeholder="搜索备份文件"></label></div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="备份文件列表">
             <table><thead><tr><th>文件</th><th>创建时间</th><th>大小</th><th class="right">操作</th></tr></thead><tbody id="backup-table"></tbody></table>
           </div>
@@ -212,7 +215,7 @@
       <section id="page-deployment" class="page-panel" hidden>
         <div class="two-columns">
           <article class="panel">
-            <div class="panel-heading"><h2>当前部署</h2></div>
+            <div class="panel-heading"><h2>当前部署</h2><span id="version-consistency" class="badge neutral">正在核对版本</span></div>
             <div class="panel-body">
               <div class="version-block"><strong id="current-sha">—</strong><a id="commit-link" target="_blank" rel="noopener" href="https://github.com/wen3343055414-sys/AI---WQS">查看提交 ↗</a></div>
               <dl class="detail-list" id="release-summary"></dl>
@@ -237,6 +240,14 @@
 
       <section id="page-audit" class="page-panel" hidden>
         <article class="panel">
+          <div class="admin-table-controls">
+            <label class="admin-search"><svg aria-hidden="true"><use href="#i-search"/></svg><input id="audit-search" type="search" maxlength="100" aria-label="搜索操作记录" placeholder="搜索操作记录"></label>
+            <select id="audit-result" aria-label="操作结果筛选">
+              <option value="all">全部结果</option><option value="success">成功</option>
+              <option value="failed">未完成</option><option value="deferred">已暂缓</option>
+              <option value="interrupted">已中断</option><option value="started">已开始</option>
+            </select>
+          </div>
           <div class="table-scroll" tabindex="0" role="region" aria-label="管理操作记录">
             <table><thead><tr><th>时间</th><th>操作</th><th>结果</th><th>说明</th></tr></thead><tbody id="audit-table"></tbody></table>
           </div>

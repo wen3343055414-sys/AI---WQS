@@ -105,10 +105,12 @@ export class AuthDialog {
       if (action === "send-code") this.sendCode();
     });
     this.element.addEventListener("keydown", event => {
-      if (!event.target.matches('[role="tab"]') || !["ArrowLeft", "ArrowRight"].includes(event.key)) return;
+      if (this.busy || !event.target.matches('[role="tab"]') || !["ArrowLeft", "ArrowRight", "Home", "End"].includes(event.key)) return;
       event.preventDefault();
       const index = methods.findIndex(([key]) => key === this.method);
-      this.switchMethod(methods[(index + (event.key === "ArrowRight" ? 1 : 2)) % 3][0]);
+      const offset = event.key === "ArrowRight" ? 1 : methods.length - 1;
+      const next = event.key === "Home" ? 0 : event.key === "End" ? methods.length - 1 : (index + offset) % methods.length;
+      this.switchMethod(methods[next][0]);
       this.element.querySelector('[aria-selected="true"]')?.focus();
     });
     document.body.append(this.element);
@@ -253,7 +255,11 @@ export class AuthDialog {
     if (this.busy) return;
     const form = event.currentTarget;
     const data = Object.fromEntries(new FormData(form));
-    if (this.registration && data.password !== data.confirm) { this.error("两次输入的密码不一致。"); return; }
+    if (this.registration && data.password !== data.confirm) {
+      this.error("两次输入的密码不一致。");
+      form.elements.confirm.focus();
+      return;
+    }
     this.capture();
     const registration = this.registration;
     const method = this.method;
@@ -280,8 +286,10 @@ export class AuthDialog {
       if (registration || this.cancellable) this.registrationDrafts = {};
       form.reset();
       await this.onAuthenticated();
-    } catch (error) { this.error(this.friendly(error)); }
-    finally {
+    } catch (error) {
+      this.error(this.friendly(error));
+      if (!registration && error.status === 401 && form.isConnected) form.elements.password?.focus();
+    } finally {
       this.busy = false;
       if (button.isConnected) {
         button.disabled = false;

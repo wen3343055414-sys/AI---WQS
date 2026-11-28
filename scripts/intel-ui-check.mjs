@@ -82,6 +82,13 @@ try {
 
   await page.getByRole('button', { name: '政策与采购', exact: true }).click();
   assert.equal(await list.locator('.intel-story').count(), 1);
+  const intelSearch = page.getByRole('searchbox', { name: '搜索信息' });
+  await intelSearch.fill('没有匹配的采集关键词');
+  await list.getByRole('heading', { name: '没有符合条件的信息' }).waitFor();
+  await list.getByRole('button', { name: '清除筛选', exact: true }).click();
+  assert.equal(await intelSearch.inputValue(), '');
+  assert.ok(await intelSearch.evaluate(element => element === document.activeElement));
+  assert.equal(await list.locator('.intel-story').count(), 6);
   await page.locator('#sidebar a[href="#todo"]').click();
   await page.getByRole('button', { name: '搜索工作空间', exact: true }).click();
   await page.locator('#global-search').fill('本地推理');
