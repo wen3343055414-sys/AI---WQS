@@ -23,7 +23,7 @@ test("legacy workspaces remain readable and gain features without losing chat re
   assert.equal(loaded.warning, "");
   assert.equal(JSON.stringify(loaded.state), original);
   assert.deepEqual(enabledToolIds(loaded.state), BUILTIN_TOOLS.map(tool => tool.id));
-  const id = saveTodo(loaded.state, "", { title: "  检查发布  ", notes: "原任务备注" }, now);
+  const id = saveTodo(loaded.state, "", { title: "  检查发布  ", notes: "原任务备注", sourceSessionId: sessionId }, now);
   setToolEnabled(loaded.state, "text-stats", false);
   assert.ok(validateState(loaded.state));
   assert.equal(loaded.state.todos[0].title, "检查发布");
@@ -32,6 +32,8 @@ test("legacy workspaces remain readable and gain features without losing chat re
   assert.equal(searchWorkspace(loaded.state, "原任务备注")[0].kind, "todo");
   removeSession(loaded.state, sessionId);
   assert.equal(loaded.state.todos[0].id, id);
+  assert.equal(loaded.state.todos[0].sourceSessionId, sessionId);
+  assert.ok(validateState(loaded.state));
   const secondSession = recordExchange(loaded.state, "", "继续原功能");
   removeTodo(loaded.state, id);
   assert.equal(loaded.state.sessions[0].id, secondSession);
@@ -40,12 +42,13 @@ test("legacy workspaces remain readable and gain features without losing chat re
 
 test("task editing and completion keep identity and reject invalid writes atomically", () => {
   const state = createInitialState();
-  const id = saveTodo(state, "", { title: "完成设计", notes: "" }, now);
+  const id = saveTodo(state, "", { title: "完成设计", notes: "", dueDate: "2028-02-29" }, now);
   setTodoDone(state, id, true, "2026-11-15T03:00:00.000Z");
   saveTodo(state, id, { title: "完成设计评审", notes: "补充备注" }, "2026-11-15T04:00:00.000Z");
   assert.equal(state.todos.length, 1);
   assert.equal(state.todos[0].createdAt, now);
   assert.equal(state.todos[0].done, true);
+  assert.equal(state.todos[0].dueDate, "2028-02-29");
   assert.equal(state.todos[0].updatedAt, "2026-11-15T04:00:00.000Z");
   const before = JSON.stringify(state);
   for (const fields of [{ title: "  ", notes: "" }, { title: "x".repeat(101), notes: "" }, { title: "有效", notes: "x".repeat(2001) }]) {
@@ -53,12 +56,16 @@ test("task editing and completion keep identity and reject invalid writes atomic
     assert.equal(JSON.stringify(state), before);
   }
   assert.throws(() => saveTodo(state, "missing", { title: "保留", notes: "" }, now));
+  assert.throws(() => saveTodo(state, id, { title: "有效", dueDate: "2027-02-29" }, now), /截止日期/);
+  assert.throws(() => saveTodo(state, "", { title: "有效", sourceSessionId: "missing" }, now), /原对话/);
   assert.throws(() => setTodoDone(state, id, "true", now));
   assert.throws(() => setTodoDone(state, id, false, "bad-date"));
   assert.throws(() => setToolEnabled(state, "unavailable", true));
   assert.equal(JSON.stringify(state), before);
   setTodoDone(state, id, false, now);
   assert.equal(state.todos[0].done, false);
+  saveTodo(state, id, { title: "完成设计评审", notes: "", dueDate: "" }, now);
+  assert.equal(Object.hasOwn(state.todos[0], "dueDate"), false);
 });
 
 test("workspace validation rejects malformed or oversized optional features", () => {
@@ -70,6 +77,9 @@ test("workspace validation rejects malformed or oversized optional features", ()
     value => { value.todos[0].title = "x".repeat(101); },
     value => { value.todos[0].notes = "x".repeat(2001); },
     value => { value.todos[0].done = "yes"; },
+    value => { value.todos[0].dueDate = "2026-11-31"; },
+    value => { value.todos[0].dueDate = "2026-11-15T00:00:00.000Z"; },
+    value => { value.todos[0].sourceSessionId = "#other"; },
     value => { value.todos[0].updatedAt = '2026-11-15" onfocus="x'; },
     value => { value.todos.push({ ...value.todos[0] }); },
     value => { value.todos = Array.from({ length: 1001 }, (_, i) => ({ ...value.todos[0], id: "todo-" + i })); },
@@ -104,7 +114,10 @@ test("task lists and tool preferences survive SQLite reopen with account and rev
     const next = store.read(owner.id);
     assert.equal(next.state.todos, undefined);
     assert.ok(validateState(next.state));
-    const id = saveTodo(next.state, "", { title: "当前账号的任务", notes: "独立保存" }, now);
+    const source = recordExchange(next.state, "", "检查发布准备", "AI 对话", now);
+    const id = saveTodo(next.state, "", {
+      title: "当前账号的任务", notes: "独立保存", dueDate: "2026-11-16", sourceSessionId: source,
+    }, now);
     setTodoDone(next.state, id, true, now);
     setToolEnabled(next.state, "text-stats", false);
     store.save(next.state, next.revision, owner.id);
@@ -120,6 +133,8 @@ test("task lists and tool preferences survive SQLite reopen with account and rev
     assert.equal(restored.todos.length, 1);
     assert.equal(restored.todos[0].id, id);
     assert.equal(restored.todos[0].done, true);
+    assert.equal(restored.todos[0].dueDate, "2026-11-16");
+    assert.equal(restored.todos[0].sourceSessionId, source);
     assert.ok(!enabledToolIds(restored).includes("text-stats"));
     assert.equal(store.read(bob.id).state.todos[0].title, "另一个账号的任务");
     assert.ok(validateState(JSON.parse(JSON.stringify(restored))));
