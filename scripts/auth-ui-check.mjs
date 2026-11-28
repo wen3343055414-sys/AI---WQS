@@ -324,6 +324,7 @@ try {
   await page.getByRole("heading", { name: "任务", exact: true }).waitFor();
   await assertNavigation();
   assert.equal(await page.locator(".todo-item").count(), 0);
+  assert.deepEqual(await page.locator("#todo-tabs strong").allTextContents(), ["0", "0", "0"]);
   await page.locator('.page-intro [data-action="new-todo"]').click();
   await page.locator('#todo-form input[name="title"]').fill("   ");
   await page.getByRole("button", { name: "保存任务", exact: true }).click();
@@ -341,11 +342,14 @@ try {
   await page.locator("#todo-form").waitFor({ state: "hidden" });
   await page.getByRole("checkbox", { name: "标记完成：整理工具入口", exact: true }).click();
   assert.equal(await page.locator(".todo-item.is-done").count(), 1);
+  assert.deepEqual(await page.locator("#todo-tabs strong").allTextContents(), ["2", "1", "1"]);
   await page.locator('#todo-tabs [data-id="已完成"]').click();
+  assert.equal(await page.locator('#todo-tabs [data-id="已完成"]').getAttribute("aria-pressed"), "true");
   assert.equal(await page.locator(".todo-item").count(), 1);
   assert.match(await page.locator(".todo-item").innerText(), /整理工具入口/);
   await page.getByRole("checkbox", { name: "恢复待办：整理工具入口", exact: true }).click();
   assert.equal(await page.locator(".todo-item").count(), 0);
+  assert.ok(await page.locator('#todo-tabs [data-id="已完成"]').evaluate(element => element === document.activeElement));
   await page.locator('#todo-tabs [data-id="待完成"]').click();
   assert.equal(await page.locator(".todo-item").count(), 2);
   await page.getByRole("checkbox", { name: "标记完成：整理工具入口", exact: true }).click();
@@ -355,7 +359,10 @@ try {
   assert.equal(await page.locator(".todo-item").count(), 1);
   await page.locator("#todo-search").fill("不存在的任务");
   await page.getByText("没有符合条件的任务", { exact: true }).waitFor();
-  await page.locator("#todo-search").fill("");
+  await page.getByRole("button", { name: "清除筛选", exact: true }).click();
+  assert.equal(await page.locator("#todo-search").inputValue(), "");
+  assert.ok(await page.locator("#todo-search").evaluate(element => element === document.activeElement));
+  assert.equal(await page.locator(".todo-item").count(), 2);
   await page.getByRole("button", { name: "删除任务：规划新版本 · 已更新", exact: true }).click();
   await page.getByRole("button", { name: "取消", exact: true }).click();
   assert.equal(await page.locator(".todo-item").count(), 2);
@@ -372,6 +379,13 @@ try {
   assert.equal(await page.locator(".todo-item").count(), 2);
   assert.equal(await page.locator(".todo-item.is-done").count(), 1);
   assert.equal(await page.getByRole("progressbar", { name: "完成进度" }).getAttribute("value"), "1");
+  const themeShortcut = page.getByRole("button", { name: "切换主题", exact: true });
+  await themeShortcut.press("Enter");
+  assert.equal(await page.locator("body").getAttribute("data-theme"), "dark");
+  assert.ok(await themeShortcut.evaluate(element => element === document.activeElement));
+  await themeShortcut.press("Enter");
+  assert.equal(await page.locator("body").getAttribute("data-theme"), "light");
+  assert.equal(await page.locator(".todo-item").count(), 2);
   await page.screenshot({ path: path.join(output, "features-tasks-desktop.png") });
 
   await page.goto(base + "/#knowledge");
