@@ -73,6 +73,7 @@ const paths = {
   list: '<path d="M9 5h12M9 12h12M9 19h12M3 5h.01M3 12h.01M3 19h.01"/>',
   star: '<path d="m12 3 2.8 5.8 6.4.9-4.6 4.5 1.1 6.3L12 17.5l-5.7 3 1.1-6.3-4.6-4.5 6.4-.9L12 3Z"/>',
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M2 12h2M20 12h2M5 5l1.5 1.5M17.5 17.5 19 19M5 19l1.5-1.5M17.5 6.5 19 5"/>',
+  moon: '<path d="M20.5 15.2A8.8 8.8 0 0 1 8.8 3.5 9 9 0 1 0 20.5 15.2Z"/>',
   clip: '<path d="m8 13 7-7a3 3 0 0 1 4 4l-9 9a5 5 0 0 1-7-7L13 2"/>',
   send: '<path d="m3 3 19 9-19 9 3-9-3-9Zm3 9h16"/>',
   upload: '<path d="M12 16V3m-5 5 5-5 5 5M3 16v5h18v-5"/>',
@@ -128,6 +129,7 @@ const categoryStyle = {
   办公: ["orange", "briefcase"],
   学习: ["green", "book"],
 };
+const todoFilters = [["全部", "全部任务", "layers"], ["待完成", "待完成", "history"], ["已完成", "已完成", "check"]];
 const initial = readState({ getItem: (key) => localStorage.getItem(key) });
 let state = initial.state;
 let sync;
@@ -413,13 +415,11 @@ function applyTheme() {
         : "light"
       : state.settings.theme;
 }
+const dateOptions = { month: "2-digit", day: "2-digit", timeZone: "Asia/Shanghai" };
+const shortDate = new Intl.DateTimeFormat("zh-CN", dateOptions);
+const dateWithTime = new Intl.DateTimeFormat("zh-CN", { ...dateOptions, hour: "2-digit", minute: "2-digit" });
 function dateText(value, full = false) {
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    ...(full ? { hour: "2-digit", minute: "2-digit" } : {}),
-    timeZone: "Asia/Shanghai",
-  }).format(new Date(value));
+  return (full ? dateWithTime : shortDate).format(new Date(value));
 }
 const category = (value) => {
   const [tone, name] = categoryStyle[value] || ["purple", "file"];
@@ -630,23 +630,48 @@ function todoResults() {
     (todoFilter === "全部" || todo.done === (todoFilter === "已完成")) &&
     (!query || (todo.title + " " + todo.notes).toLocaleLowerCase().includes(query)))
     .sort((one, two) => Number(one.done) - Number(two.done) || two.updatedAt.localeCompare(one.updatedAt));
-  if (!items.length) return empty("list", query || todoFilter !== "全部" ? "没有符合条件的任务" : "暂无任务", "");
+  if (!items.length) {
+    const filtered = Boolean(query) || todoFilter !== "全部";
+    return `<div class="todo-empty">
+      <span class="todo-empty-icon">${icon(filtered ? "search" : "list")}</span>
+      <p>${filtered ? "没有符合条件的任务" : "暂无任务"}</p>
+      ${filtered ? button("todo-clear", "清除筛选", "", "btn btn-tinted") : ""}
+    </div>`;
+  }
   return '<div class="todo-list">' + items.map(todo => `<article class="todo-item ${todo.done ? "is-done" : ""}" data-todo-id="${e(todo.id)}">
     ${button("toggle-todo", icon("check"), "", "todo-toggle", `data-id="${e(todo.id)}" role="checkbox" aria-checked="${todo.done}" aria-label="${todo.done ? "恢复待办" : "标记完成"}：${e(todo.title)}"`)}
     <div class="todo-copy"><h2>${e(todo.title)}</h2>${todo.notes ? `<p>${e(todo.notes)}</p>` : ""}</div>
+    <time class="todo-time" datetime="${e(todo.updatedAt)}" title="更新时间">${dateText(todo.updatedAt, true)}</time>
     <div class="todo-actions">${iconButton("edit-todo", `编辑任务：${todo.title}`, "pen", `data-id="${e(todo.id)}"`)}${iconButton("delete-todo", `删除任务：${todo.title}`, "trash", `data-id="${e(todo.id)}"`)}</div>
   </article>`).join("") + "</div>";
 }
 function todoPage() {
   const items = state.todos || [];
   const completed = items.filter(todo => todo.done).length;
-  return heading("任务", button("new-todo", "新建任务", "plus", "btn btn-primary")) +
-    `<div class="toolbar todo-toolbar">
-      <div id="todo-tabs">${tabs(["全部", "待完成", "已完成"], todoFilter, "todo-filter")}</div>
-      ${items.length ? `<div class="todo-progress"><progress max="${items.length}" value="${completed}" aria-label="完成进度"></progress><span>${completed}/${items.length} 完成</span></div>` : ""}
-      ${searchField("todo-search", "搜索任务…", todoQuery)}
+  const counts = [items.length, items.length - completed, completed];
+  return `<header class="page-intro todo-hero">
+    <div class="todo-hero-art" aria-hidden="true">
+      <div class="todo-hero-orbit"></div>
+      <div class="todo-hero-stack"><i></i><i></i><i></i><span>${icon("check")}</span></div>
     </div>
-    <div id="todo-results" aria-live="polite">${todoResults()}</div>`;
+    <div class="todo-hero-copy">
+      <h1 tabindex="-1" id="page-title">任务</h1>
+      ${button("new-todo", "新建任务", "plus", "btn todo-create")}
+    </div>
+    </header>
+    <div class="todo-overview" id="todo-tabs" role="group" aria-label="任务筛选">
+      ${todoFilters.map(([id, label, name], index) => button("todo-filter",
+        `<span class="todo-metric-label">${label}</span><strong>${counts[index]}</strong><span class="todo-metric-icon">${icon(name)}</span>`,
+        "", "todo-metric",
+        `data-id="${id}" aria-pressed="${todoFilter === id}" aria-label="${label}，${counts[index]} 项" aria-controls="todo-results"`)).join("")}
+    </div>
+    <section class="todo-panel" aria-label="任务列表">
+      <div class="todo-toolbar">
+        ${searchField("todo-search", "搜索任务…", todoQuery)}
+        ${items.length ? `<div class="todo-progress"><progress max="${items.length}" value="${completed}" aria-label="任务完成进度"></progress><span>${completed}/${items.length} 完成</span></div>` : ""}
+      </div>
+      <div id="todo-results" aria-live="polite">${todoResults()}</div>
+    </section>`;
 }
 function pluginReady(connection) {
   return Boolean(connection.enabled && connection.status === "connected" && connection.selectedCount > 0);
@@ -1321,6 +1346,7 @@ function render() {
   const caret = textarea && textarea === document.activeElement ? [textarea.selectionStart, textarea.selectionEnd, textarea.selectionDirection] : null;
   if (textarea) drafts.set(textarea.form.dataset.draft, textarea.value);
   const { page } = route();
+  const pageLayout = { chat: " main-chat", home: " main-intel", todo: " main-todo" }[page] || "";
   applyTheme();
   const title = nav.find((n) => n[0] === page)[1];
   document.title = `${title} · 智作台`;
@@ -1332,13 +1358,15 @@ function render() {
       <header class="topbar">
         ${button("toggle-sidebar", '<span data-sidebar-toggle-label>收起侧边栏</span>', "sidebar-close", "sidebar-toggle",
           'aria-label="收起侧边栏" title="收起侧边栏" aria-expanded="true" aria-controls="sidebar" aria-keyshortcuts="Control+Shift+S Meta+Shift+S" data-menu-button')}
-        <div class="breadcrumb"><span>工作空间</span><span class="mobile-page-name">${title}</span></div>
+        <div class="breadcrumb">工作空间</div>
         <div class="topbar-tools">
           ${button("search", `<span>搜索</span><kbd>${macShortcuts ? "⌘ K" : "Ctrl K"}</kbd>`, "search", "search-trigger", 'aria-label="搜索工作空间"')}
+          ${button("theme", `<span class="theme-moon">${icon("moon")}</span><span class="theme-sun">${icon("sun")}</span>`,
+            "", "icon-button", 'aria-label="切换主题" title="切换主题" data-theme-shortcut')}
           <a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a>
         </div>
       </header>
-      <main class="main${page === "chat" ? " main-chat" : page === "home" ? " main-intel" : ""}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: () => intel.render(), todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
+      <main class="main${pageLayout}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: () => intel.render(), todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
   if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
   const messages = document.querySelector("#messages");
@@ -1655,7 +1683,8 @@ async function handleAction(target) {
       if (!todo) throw new Error("任务已不存在。");
       mutate(next => setTodoDone(next, id, !todo.done));
       render();
-      document.querySelector('#todo-results [data-action="toggle-todo"][data-id="' + id + '"]')?.focus();
+      (document.querySelector('#todo-results [data-action="toggle-todo"][data-id="' + id + '"]') ||
+        document.querySelector('#todo-tabs [aria-pressed="true"]'))?.focus();
       toast(todo.done ? "已恢复为待办任务" : "任务已完成");
       break;
     }
@@ -1670,11 +1699,19 @@ async function handleAction(target) {
       break;
     }
     case "todo-filter":
-      if (!["全部", "待完成", "已完成"].includes(id)) break;
+      if (!todoFilters.some(([filter]) => filter === id)) break;
       todoFilter = id;
       render();
-      document.querySelector('#todo-tabs [data-id="' + id + '"]')?.focus();
+      document.querySelector('#todo-tabs [aria-pressed="true"]')?.focus();
       break;
+    case "todo-clear": {
+      const fromSearch = Boolean(todoQuery.trim());
+      todoFilter = "全部";
+      todoQuery = "";
+      render();
+      document.querySelector(fromSearch ? "#todo-search" : '#todo-tabs [aria-pressed="true"]')?.focus();
+      break;
+    }
     case "plugins-refresh":
       await refreshPlugins(true);
       render();
@@ -1948,14 +1985,18 @@ async function handleAction(target) {
       }
       break;
     }
-    case "theme":
-      if (["light", "dark", "system"].includes(id)) {
+    case "theme": {
+      const shortcut = target.hasAttribute("data-theme-shortcut");
+      const theme = shortcut ? (document.body.dataset.theme === "dark" ? "light" : "dark") : id;
+      if (["light", "dark", "system"].includes(theme)) {
         mutate((next) => {
-          next.settings.theme = id;
+          next.settings.theme = theme;
         });
         render();
+        if (shortcut) document.querySelector("[data-theme-shortcut]")?.focus();
       }
       break;
+    }
     case "export-all":
       exportJSON("智作台-工作空间备份.json", state);
       break;
