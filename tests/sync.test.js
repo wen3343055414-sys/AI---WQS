@@ -86,3 +86,64 @@ test("退出请求失败时保留当前账号并恢复同步", async t => {
   assert.equal(sync.accountActionBusy, false);
   assert.ok(sync.timer);
 });
+
+
+test("轮询期间的编辑保留原修订号并重新调度保存", async t => {
+  const sync = client();
+  sync.pending = null;
+  sync.user = { id: 1 };
+  sync.version = "v1";
+  t.after(() => clearTimeout(sync.flushTimer));
+  const reading = Promise.withResolvers(), snapshot = Promise.withResolvers();
+  let applied = 0;
+  sync.callbacks.onState = () => { applied++; };
+  sync.request = async url => {
+    if (url === "/api/status") return { authenticated: true, user: sync.user, serverId: sync.serverId, version: "v1" };
+    reading.resolve();
+    return snapshot.promise;
+  };
+  const polling = sync.poll();
+  await reading.promise;
+  const local = createInitialState();
+  sync.enqueue(local);
+  clearTimeout(sync.flushTimer);
+  sync.flushTimer = undefined;
+  await sync.flush();
+  snapshot.resolve({ state: createInitialState(), revision: 4, userId: 1 });
+  await polling;
+  assert.equal(applied, 0);
+  assert.equal(sync.revision, 3);
+  assert.deepEqual(sync.pending, local);
+  assert.notEqual(sync.flushTimer, undefined);
+  let sent;
+  sync.request = async (_, options) => {
+    sent = JSON.parse(options.body);
+    const conflict = new Error("conflict");
+    conflict.status = 409;
+    conflict.body = { revision: 4, state: createInitialState() };
+    throw conflict;
+  };
+  await sync.flush();
+  assert.equal(sent.baseRevision, 3);
+  assert.equal(sync.conflict.revision, 4);
+  assert.deepEqual(sync.pending, local);
+});
+
+test("轮询发现新版本时不会刷新刚编辑的页面", async t => {
+  const sync = client();
+  sync.pending = null;
+  sync.user = { id: 1 };
+  sync.version = "v1";
+  t.after(() => clearTimeout(sync.flushTimer));
+  const response = Promise.withResolvers();
+  const versions = [];
+  sync.callbacks.canReload = () => true;
+  sync.callbacks.onVersion = version => versions.push(version);
+  sync.request = async () => response.promise;
+  const polling = sync.poll();
+  sync.enqueue(createInitialState());
+  response.resolve({ authenticated: true, user: sync.user, serverId: sync.serverId, version: "v2" });
+  await polling;
+  assert.deepEqual(versions, ["v2"]);
+  assert.ok(sync.pending);
+});

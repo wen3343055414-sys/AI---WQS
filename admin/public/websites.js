@@ -111,7 +111,8 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
   }
   function domainRows() {
     return lanRows() + customRows() ||
-      `<tr role="row"><td role="cell" colspan="4"><div class="dm-empty">${icon('globe')}<h3>${query.trim() ? '没有匹配的地址' : '暂无访问地址'}</h3></div></td></tr>`;
+      `<tr role="row"><td role="cell" colspan="4"><div class="dm-empty">${icon('globe')}<h3>${query.trim() ? '没有匹配的地址' : '暂无访问地址'}</h3>${query.trim() ?
+        '<button type="button" class="dm-button" data-domain-action="clear-search">清除搜索</button>' : ''}</div></td></tr>`;
   }
   function domainPanel() {
     return `<div class="dm-toolbar">
@@ -273,6 +274,13 @@ export function initWebsites({ api, toast, escape: e, icon, date }) {
     const button = event.target.closest('[data-domain-action]');
     if (!button || button.disabled || busy) return;
     const action = button.dataset.domainAction, item = findDomain(button.dataset.id);
+    if (action === 'clear-search') {
+      const search = $('domain-search');
+      search.value = '';
+      search.dispatchEvent(new Event('input', { bubbles: true }));
+      search.focus();
+      return;
+    }
     if (action === 'add') return openAdd();
     if (action === 'close-add') { if (!isDirty() || window.confirm('域名尚未添加，确定放弃输入？')) $('domain-add-dialog').close(); return; }
     if (action === 'close-detail') return $('domain-detail-dialog').close();

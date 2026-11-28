@@ -186,3 +186,32 @@ dialog p { color: var(--muted); }
   .sidebar { transition: none; }
   .spinning svg { animation: none; }
 }
+
+
+.admin-refresh-time { color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; }
+.admin-table-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px 16px; border-bottom: 1px solid var(--line); }
+.admin-search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 36px;
+  width: min(100%, 245px);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 9px;
+  background: var(--surface);
+  color: var(--muted);
+}
+.admin-search svg { width: 15px; height: 15px; }
+.admin-search:focus-within { outline: 2px solid var(--blue); outline-offset: 1px; }
+.admin-search input { width: 100%; min-width: 0; min-height: 34px; border: 0; outline: 0; background: transparent; color: var(--ink); }
+.admin-table-controls select { min-height: 36px; border: 1px solid var(--line); border-radius: 8px; padding: 0 8px; background: var(--surface); color: var(--ink); }
+.log-toolbar { flex-wrap: wrap; }
+.log-toolbar .admin-search { flex: 1 1 150px; }
+.service-status { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 5px; }
+.service-row .service-log { white-space: nowrap; flex: none; }
+@media (max-width: 520px) {
+  .admin-refresh-time { display: none; }
+  .log-toolbar .admin-search { flex-basis: 100%; width: 100%; }
+  .service-row .service-log { font-size: 11px; margin-inline-start: 0; }
+}

@@ -237,16 +237,19 @@ export class IntelligenceView {
     return `<div class="intel-empty"><span aria-hidden="true">${this.icon(icon)}</span><h3>${heading}</h3>${action}</div>`;
   }
   list() {
-    if (!this.data) return this.empty('rss', this.getSync()?.mode === 'local' ? '连接工作台服务后查看信息' : this.error ? '暂时无法载入信息' : '正在读取信息');
+    if (!this.data) return this.empty('rss', this.getSync()?.mode === 'local' ? '连接工作台服务后查看信息' : this.error ? '暂时无法载入信息' : '正在读取信息',
+      this.error && this.getSync()?.authenticated ? this.control('retry-load', '重新读取', 'refresh') : '');
     if (this.view === 'sources') return this.sourceList();
     if (this.view === 'alerts') return this.alertList();
     const rows = this.articles();
+    const filtered = Boolean(this.query.trim() || this.topic || this.source || this.todayOnly);
     const filter = this.todayOnly ? '今日发布' : this.source ? this.data.sources.find(source => source.id === this.source)?.name : '';
     return `${filter ? `<div class="intel-filter-indicator">${this.control('clear-filter', e(filter) + this.icon('close'), '', { kind: 'intel-chip', extra: 'aria-label="清除筛选"' })}</div>` : ''}
       ${rows.length ? rows.slice(0, this.limit).map(article => this.articleCard(article)).join('') :
-        this.empty(this.view === 'saved' ? 'bookmark' : 'rss', this.query || this.topic || filter ? '没有符合条件的信息' :
+        this.empty(this.view === 'saved' ? 'bookmark' : 'rss', filtered ? '没有符合条件的信息' :
           this.view === 'saved' ? '暂无收藏' : this.data.sources.some(source => source.updating) ? '正在采集第一批信息' : '暂无可用信息',
-        this.view === 'feed' && !this.query && !this.topic ? this.control('view', '查看信源', 'arrow', { id: 'sources' }) : '')}
+        filtered ? this.control('reset-filters', '清除筛选', 'close') :
+          this.view === 'feed' ? this.control('view', '查看信源', 'arrow', { id: 'sources' }) : '')}
       ${rows.length > this.limit ? `<div class="intel-more">${this.control('more', '显示更多', 'down')}</div>` : ''}`;
   }
   sourceList() {
@@ -403,7 +406,12 @@ export class IntelligenceView {
         break;
       case 'topic': this.topic = id; this.limit = 12; this.update(); break;
       case 'filter-source': this.setView('feed'); this.source = id; this.update(); break;
-      case 'clear-filter': this.source = ''; this.todayOnly = false; this.update(); break;
+      case 'clear-filter': this.source = ''; this.todayOnly = false; this.limit = 12; this.update(); break;
+      case 'reset-filters':
+        this.setView(this.view);
+        document.querySelector('#intel-search')?.focus();
+        break;
+      case 'retry-load': await this.refresh(true, true); break;
       case 'more': this.limit += 12; this.update(); break;
       case 'jump-brief': document.querySelector('.intel-brief h2')?.focus(); break;
       case 'refresh': {

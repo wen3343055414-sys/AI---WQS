@@ -33,14 +33,14 @@ const containers = ['frontend', 'backend'].map(service => ({
   service, image: 'ai-wqs-' + service + ':' + sha + '-models-v1',
   ports: service === 'frontend' ? '127.0.0.1:3000->8080/tcp' : '',
 }));
-let scheduled = true, logSources = [], observedActions = [];
+let scheduled = true, adminRevision = sha, logSources = [], observedActions = [];
 const manager = {
   async overview() {
     return {
       updatedAt: timestamp, project: 'ai-wqs-preview', branch: 'main',
       repository: 'example/fixture', appUrl: 'http://127.0.0.1:3000',
       deployment: { sha, previous: 'b'.repeat(40), updatedAt: timestamp, lastBackup: timestamp },
-      admin: { port: 3100, pid: 42, revision: sha, uptimeSeconds: 40000, memoryBytes: 64000000 },
+      admin: { port: 3100, pid: 42, revision: adminRevision, uptimeSeconds: 40000, memoryBytes: 64000000 },
       host: { cpuCount: 8, memoryTotal: 16000000000, memoryUsed: 7000000000, uptimeSeconds: 40000 },
       docker: { available: true }, application: { healthy: true }, containers,
       stats: containers.map(container => ({ name: container.name, cpu: '0.2%', memory: '42 MiB / 2 GiB', memoryPercent: '2.1%' })),
@@ -87,6 +87,7 @@ try {
   await page.locator('#password-confirm').fill(password);
   await page.getByRole('button', { name: '设置密码并登录' }).click();
   await page.locator('#metric-status').filter({ hasText: '运行正常' }).waitFor();
+  assert.equal(await page.locator('#admin-refreshed').getAttribute('datetime'), timestamp);
   assert.equal(await page.locator('#page-overview .panel-disclosure[open]').count(), 0);
   await page.screenshot({ path: path.join(output, 'admin-overview-desktop.png'), fullPage: true });
 
@@ -107,19 +108,38 @@ try {
   await page.getByRole('dialog', { name: '停止工作台' }).waitFor();
   await page.keyboard.press('Escape');
   assert.deepEqual(observedActions, []);
-  await navigate('logs');
+  await page.getByRole('button', { name: '查看后端服务日志', exact: true }).click();
+  await page.locator('#page-logs').waitFor();
+  assert.equal(await page.locator('#log-source').inputValue(), 'backend');
   await page.locator('#log-source').selectOption('frontend');
   await page.locator('#log-output').filter({ hasText: '联调日志 · frontend' }).waitFor();
   await page.locator('#log-source').selectOption('update');
   await page.locator('#log-output').filter({ hasText: '联调日志 · update' }).waitFor();
   assert.ok(logSources.includes('backend'));
+  const logQuery = page.locator('#log-query');
+  await logQuery.fill('unknown-fixture-log');
+  await page.locator('#log-output').filter({ hasText: '没有匹配的日志' }).waitFor();
+  await logQuery.fill('联调日志');
+  await page.locator('#log-output').filter({ hasText: '联调日志 · update' }).waitFor();
   await navigate('backups');
+  const backupQuery = page.locator('#backup-search');
+  await backupQuery.fill('unknown-fixture-backup');
+  await page.getByText('没有匹配的备份文件', { exact: true }).waitFor();
+  await backupQuery.fill('20261122');
   await page.getByRole('link', { name: '下载', exact: true }).waitFor();
   await page.locator('#page-backups summary').click();
   await page.getByText('每天及升级前自动备份，保留最近 30 份。暂停自动更新时可手动备份。', { exact: true }).waitFor();
   await navigate('deployment');
   await page.getByText('跟随分支', { exact: true }).last().waitFor({ state: 'visible' });
   assert.equal(await page.locator('#current-sha').innerText(), sha.slice(0, 12));
+  const consistency = page.locator('#version-consistency');
+  assert.equal(await consistency.innerText(), '运行版本一致');
+  adminRevision = 'e'.repeat(40);
+  await page.locator('#refresh').click();
+  await consistency.filter({ hasText: '运行版本不一致' }).waitFor();
+  adminRevision = sha;
+  await page.locator('#refresh').click();
+  await consistency.filter({ hasText: '运行版本一致' }).waitFor();
   await page.locator('#page-deployment summary').click();
   await page.getByText('前端容器版本', { exact: true }).waitFor();
   await page.getByRole('button', { name: '检查并更新', exact: true }).click();
@@ -130,7 +150,15 @@ try {
   await page.getByRole('button', { name: '暂停自动更新', exact: true }).click();
   await page.getByRole('button', { name: '恢复自动更新', exact: true }).waitFor({ timeout: 15000 });
   await navigate('audit');
-  assert.ok(await page.locator('#audit-table tr').count() > 0);
+  const audit = page.locator('#audit-table');
+  const auditQuery = page.locator('#audit-search');
+  await auditQuery.fill('unknown-fixture-action');
+  await audit.getByText('没有匹配的操作记录', { exact: true }).waitFor();
+  await auditQuery.clear();
+  await page.locator('#audit-result').selectOption('deferred');
+  await audit.getByText('没有匹配的操作记录', { exact: true }).waitFor();
+  await page.locator('#audit-result').selectOption('all');
+  await audit.getByText('初始化管理后台', { exact: true }).first().waitFor();
   await navigate('api-settings');
   await page.locator('#provider-config-form').waitFor();
   assert.equal(await page.locator('#provider-api-key').isVisible(), false);
@@ -138,6 +166,12 @@ try {
   await providerTab.focus();
   await page.keyboard.press('ArrowRight');
   await page.getByRole('tabpanel', { name: '模型', exact: true }).waitFor();
+  const modelSearch = page.locator('#model-search');
+  await modelSearch.fill('unknown-fixture-model');
+  await page.getByRole('button', { name: '清除筛选', exact: true }).click();
+  assert.equal(await modelSearch.inputValue(), '');
+  assert.ok(await modelSearch.evaluate(element => element === document.activeElement));
+  await page.getByRole('tab', { name: '模型', exact: true }).focus();
   await page.keyboard.press('End');
   await page.getByRole('tabpanel', { name: '用量与限额' }).waitFor();
   await page.keyboard.press('Home');
@@ -162,7 +196,9 @@ try {
   await search.fill('no-match');
   await page.getByText('没有匹配的地址', { exact: true }).waitFor();
   assert.equal(await search.evaluate(element => element === document.activeElement), true);
-  await search.fill('');
+  await page.getByRole('button', { name: '清除搜索', exact: true }).click();
+  assert.equal(await search.inputValue(), '');
+  assert.ok(await search.evaluate(element => element === document.activeElement));
   await page.getByRole('button', { name: '添加域名', exact: false }).click();
   await page.getByRole('dialog', { name: '添加域名' }).waitFor();
   await page.locator('#domain-hostname').fill('workbench.example.test');

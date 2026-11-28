@@ -156,10 +156,11 @@ let promptFilter = "全部",
   documentFilter = "全部",
   documentQuery = "",
   historyQuery = "",
+  historyPinned = false,
   todoFilter = "全部",
   todoDateFilter = "all",
   todoQuery = "";
-let pluginConnections = [], pluginHistory = [], pluginError = "", pluginsLoaded = false, pluginLoading = false, pluginChecked = 0, pluginViewDirty = false;
+let pluginConnections = [], pluginHistory = [], pluginError = "", pluginsLoaded = false, pluginLoading = null, pluginChecked = 0, pluginViewDirty = false;
 const selectedPluginIds = new Set(), pluginDetailsCache = new Map(), pluginApprovals = new Map();
 const drafts = new Map();
 const chatMentions = new Map();
@@ -548,21 +549,26 @@ function conversationList(sessions, filtered = false) {
   if (!sessions.length) return empty(
     "history", filtered ? "没有找到相关对话" : "还没有历史对话",
     filtered ? "试试对话标题或消息中的其他关键词。" : "",
-    filtered ? "" : button("new-chat", "新对话", "plus", "btn"),
+    filtered ? button("history-clear", "清除筛选", "", "btn") : button("new-chat", "新对话", "plus", "btn"),
   );
   return `<ul class="conversation-list" aria-label="历史对话列表">${sessions.map(session => {
     const last = session.messages.at(-1);
     const content = (last?.demo ? session.messages.findLast(message => message.role === "user") : last)?.content || "";
     const preview = Array.from(content.replace(/\s+/g, " ")).slice(0, 120).join("");
-    return `<li><a class="conversation-link" href="#chat/${e(session.id)}" aria-label="继续对话：${e(session.title)}">
-      <span class="conversation-symbol">${icon("chat")}</span>
+    const actions = `data-id="${e(session.id)}"`;
+    return `<li class="conversation-item" data-history-session="${e(session.id)}"><a class="conversation-link" href="#chat/${e(session.id)}" aria-label="继续对话：${e(session.title)}">
+      <span class="conversation-symbol">${icon(session.pinned ? "pin" : "chat")}</span>
       <span class="conversation-copy"><strong>${e(session.title)}</strong>${preview && preview !== session.title ? `<span>${e(preview)}</span>` : ""}</span>
       <span class="conversation-meta"><time datetime="${e(session.updatedAt)}">${dateText(session.updatedAt, true)}</time></span>
       <span class="conversation-chevron">${icon("chevron")}</span>
-    </a></li>`;
+    </a>${rowActions("对话操作：" + session.title,
+      button("rename-session", "重命名对话", "pen", "btn btn-quiet", actions),
+      button("pin-session", session.pinned ? "取消置顶" : "置顶会话", "pin", "btn btn-quiet", actions),
+      button("export-session", "导出会话", "download", "btn btn-quiet", actions))}</li>`;
   }).join("")}</ul>`;
 }
 function promptResults() {
+  const filtered = promptFilter !== "全部" || Boolean(promptQuery.trim());
   const list = state.prompts.filter(
     (p) =>
       (promptFilter === "全部" ||
@@ -571,15 +577,15 @@ function promptResults() {
           : p.category === promptFilter)) &&
       `${p.title} ${p.description} ${p.content}`
         .toLocaleLowerCase()
-        .includes(promptQuery.toLocaleLowerCase()),
+        .includes(promptQuery.trim().toLocaleLowerCase()),
   );
   return list.length
     ? `<div class="prompt-grid library">${list.map(promptCard).join("")}</div>`
     : empty(
         "search",
-        "没有匹配的提示词",
+        filtered ? "没有匹配的提示词" : "暂无提示词",
         "",
-        button("new-prompt", "新建提示词", "plus", "btn"),
+        filtered ? button("prompt-clear", "清除筛选", "", "btn") : button("new-prompt", "新建提示词", "plus", "btn"),
       );
 }
 function searchField(id, placeholder, value) {
@@ -598,18 +604,20 @@ function promptsPage() {
   );
 }
 function documentResults() {
+  const filtered = documentFilter !== "全部" || Boolean(documentQuery.trim());
   const list = state.documents.filter(
     document => (documentFilter === "全部" || document.tag === documentFilter) &&
-      (document.name + " " + document.tag + " " + document.content).toLocaleLowerCase().includes(documentQuery.toLocaleLowerCase()),
+      (document.name + " " + document.tag + " " + document.content).toLocaleLowerCase().includes(documentQuery.trim().toLocaleLowerCase()),
   );
-  if (!list.length) return empty("folder", state.documents.length ? "没有匹配的资料" : "暂无资料", "");
+  if (!list.length) return empty("folder", filtered ? "没有匹配的资料" : "暂无资料", "",
+    filtered ? button("document-clear", "清除筛选", "", "btn") : "");
   return `<div class="document-grid">${list.map(document => {
     const target = `data-id="${e(document.id)}"`;
     const size = document.size < 1024 ? `${document.size} B` : `${(document.size / 1024).toFixed(1)} KB`;
     return `<article class="document-card">
       <div class="document-top"><span class="tile-icon tone-blue">${icon("file")}</span>
         ${rowActions("资料操作：" + document.name,
-          button("document-tag", "编辑标签", "pen", "btn btn-quiet", target),
+          button("document-tag", "编辑资料", "pen", "btn btn-quiet", target),
           button("delete-document", "删除资料", "trash", "btn btn-quiet menu-danger", target))}
       </div>
       <h3>${e(document.name)}</h3>
@@ -746,28 +754,34 @@ function pluginReady(connection) {
   return Boolean(connection.enabled && connection.status === "connected" && connection.selectedCount > 0);
 }
 async function refreshPlugins(force = false) {
-  if (!sync?.authenticated || pluginLoading || !force && Date.now() - pluginChecked < 15000) return;
+  if (!sync?.authenticated) return;
+  if (pluginLoading) return pluginLoading;
+  if (!force && Date.now() - pluginChecked < 15000) return;
   const cycle = chatAccountCycle;
-  pluginLoading = true;
   pluginChecked = Date.now();
-  try {
-    const data = await sync.request("/api/plugins");
-    if (cycle !== chatAccountCycle || !sync.authenticated) return;
-    if (!Array.isArray(data.connections) || data.connections.length > 8 || !Array.isArray(data.history)) throw new Error("插件列表响应无效。");
-    const changed = !pluginsLoaded || JSON.stringify([pluginConnections, pluginHistory, pluginError]) !== JSON.stringify([data.connections, data.history, ""]);
-    pluginConnections = data.connections;
-    pluginHistory = data.history;
-    pluginError = "";
-    pluginsLoaded = true;
-    for (const id of selectedPluginIds) if (!pluginConnections.some(connection => connection.id === id && pluginReady(connection))) selectedPluginIds.delete(id);
-    document.querySelectorAll("[data-plugin-choice-label]").forEach(element => { element.textContent = selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件"; });
-    if (changed && route().page === "plugins") { if (dialog.open || chatPending) pluginViewDirty = true; else render(); }
-  } catch (error) {
-    if (cycle !== chatAccountCycle) return;
-    pluginError = error.status === 404 ? "当前服务端还没有插件接口，请先更新工作台前后端。" : error.message;
-    pluginsLoaded = true;
-    if (route().page === "plugins" && !dialog.open && !chatPending) render();
-  } finally { if (cycle === chatAccountCycle) { pluginLoading = false; pluginChecked = Date.now(); } }
+  pluginLoading = (async () => {
+    try {
+      const data = await sync.request("/api/plugins");
+      if (cycle !== chatAccountCycle || !sync.authenticated) return;
+      if (!Array.isArray(data.connections) || data.connections.length > 8 || !Array.isArray(data.history)) throw new Error("插件列表响应无效。");
+      const changed = !pluginsLoaded || JSON.stringify([pluginConnections, pluginHistory, pluginError]) !== JSON.stringify([data.connections, data.history, ""]);
+      pluginConnections = data.connections;
+      pluginHistory = data.history;
+      pluginError = "";
+      pluginsLoaded = true;
+      for (const id of selectedPluginIds) if (!pluginConnections.some(connection => connection.id === id && pluginReady(connection))) selectedPluginIds.delete(id);
+      document.querySelectorAll("[data-plugin-choice-label]").forEach(element => { element.textContent = selectedPluginIds.size ? "插件 " + selectedPluginIds.size : "插件"; });
+      if (changed && route().page === "plugins") { if (dialog.open || chatPending) pluginViewDirty = true; else render(); }
+    } catch (error) {
+      if (cycle !== chatAccountCycle) return;
+      pluginError = error.status === 404 ? "当前服务端还没有插件接口，请先更新工作台前后端。" : error.message;
+      pluginsLoaded = true;
+      if (route().page === "plugins" && !dialog.open && !chatPending) render();
+    } finally {
+      if (cycle === chatAccountCycle) { pluginLoading = null; pluginChecked = Date.now(); }
+    }
+  })();
+  return pluginLoading;
 }
 async function pluginRequest(endpoint, data = {}) {
   if (!sync?.authenticated || sync.mode !== "server") throw new Error("请先连接并登录工作台服务。");
@@ -852,13 +866,15 @@ function pluginConnector(kind = "custom") {
     </form>`);
 }
 async function pluginDetails(id) {
-  const cycle = chatAccountCycle;
+  const cycle = chatAccountCycle, hash = location.hash;
   const connection = await sync.request("/api/plugins/" + encodeURIComponent(id));
-  if (cycle !== chatAccountCycle) return;
+  if (cycle !== chatAccountCycle || hash !== location.hash) return;
   pluginDetailsCache.set(id, connection);
   const selected = new Set(connection.selectedTools);
   openDialog(connection.name + " · 可用工具",
     `<form id="plugin-tools-form" class="dialog-body" data-id="${e(id)}" data-revision="${connection.revision}">
+    ${connection.tools.length ? searchField("plugin-tool-search", "搜索工具…", "") : ""}
+    <p id="plugin-tool-empty" class="muted" role="status" hidden>没有匹配的工具</p>
     <fieldset class="plugin-tool-list"><legend>允许在对话中使用</legend>${connection.tools.map(tool => `<article class="plugin-tool-row" data-tool-name="${e(tool.name)}"><label><input type="checkbox" name="tools" value="${e(tool.name)}" ${selected.has(tool.name) ? "checked" : ""} /><span><strong>${e(tool.title || tool.name)}</strong>${tool.title && tool.title !== tool.name ? `<code>${e(tool.name)}</code>` : ""}${tool.description ? `<small>${e(tool.description)}</small>` : ""}</span></label>
       ${button("plugin-tool-open", "执行工具", "arrow", "btn", `data-id="${e(id)}" data-tool="${e(tool.name)}" ${connection.enabled && connection.status === "connected" ? "" : "disabled"}`)}</article>`).join("") || empty("puzzle", "暂无可用工具", "检查服务权限后重新验证连接。")}</fieldset>
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}<button class="btn btn-primary" type="submit">保存对话工具</button></div></form>`, "plugin-tools-dialog");
@@ -882,7 +898,9 @@ function pluginToolEditor(id, name) {
     <div class="dialog-actions">${button("close-dialog", "关闭", "", "btn")}${button("plugin-new-call", "准备新调用", "plus", "btn", "hidden data-new-call")}<button class="btn btn-primary" type="submit">执行工具</button></div></form>`);
 }
 async function pluginPicker() {
+  const cycle = chatAccountCycle, hash = location.hash;
   await refreshPlugins(true);
+  if (cycle !== chatAccountCycle || hash !== location.hash) return;
   const connections = pluginConnections.filter(pluginReady);
   openDialog("选择对话插件",
     `<form id="plugin-picker-form" class="dialog-body">
@@ -891,7 +909,7 @@ async function pluginPicker() {
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit" ${connections.length ? "" : "disabled"}>应用</button></div></form>`);
 }
 
-function truncateTaskText(text, limit) {
+function truncateText(text, limit) {
   return text.length <= limit ? text : text.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/, "") + "…";
 }
 
@@ -902,8 +920,8 @@ function todoEditor(id = "", sourceMessage) {
   const source = state.sessions.find(item => item.id === sourceSessionId);
   const text = sourceMessage?.content.trim() || "";
   const firstLine = text.split(/\r?\n/, 1)[0].replace(/^(?:#{1,6}|[-+*])\s+/, "").trim();
-  const title = todo?.title ?? truncateTaskText(firstLine || (sourceMessage ? source?.title || "" : ""), 100);
-  const notes = todo?.notes ?? truncateTaskText(text, 2000);
+  const title = todo?.title ?? truncateText(firstLine || (sourceMessage ? source?.title || "" : ""), 100);
+  const notes = todo?.notes ?? truncateText(text, 2000);
   openDialog(todo ? "编辑任务" : "新建任务",
     `<form id="todo-form" class="dialog-body" data-id="${e(id)}" data-source-session-id="${e(sourceSessionId)}">
     ${source ? `<div class="todo-form-source">${icon("chat")}<span>来自「${e(source.title)}」</span></div>` : ""}
@@ -1027,14 +1045,19 @@ async function answerPluginApproval(taskId, approve) {
 }
 
 function historyResults() {
-  const sessions = sortedConversations(historyQuery);
-  return (historyQuery.trim() ? `<p class="history-result-count">找到 ${sessions.length} 段对话</p>` : "") +
-    conversationList(sessions, Boolean(historyQuery.trim()));
+  const sessions = sortedConversations(historyQuery).filter(session => !historyPinned || session.pinned);
+  const filtered = Boolean(historyQuery.trim()) || historyPinned;
+  return (filtered ? `<p class="history-result-count">找到 ${sessions.length} 段对话</p>` : "") +
+    conversationList(sessions, filtered);
 }
 function historyPage() {
   return heading("历史对话",
     button("export-history", "导出对话", "download", "btn")) +
-    `<div class="toolbar">${searchField("history-search", "搜索对话…", historyQuery)}</div><div id="history-results" aria-live="polite">${historyResults()}</div>`;
+    `<div class="toolbar">
+      <div class="segmented" role="group" aria-label="历史对话范围">
+        ${button("history-scope", "全部", "", historyPinned ? "" : "active", `data-id="all" aria-pressed="${!historyPinned}"`)}
+        ${button("history-scope", "置顶", "", historyPinned ? "active" : "", `data-id="pinned" aria-pressed="${historyPinned}"`)}
+      </div>${searchField("history-search", "搜索对话…", historyQuery)}</div><div id="history-results" aria-live="polite">${historyResults()}</div>`;
 }
 const chatModeIcon = { single: "chat", group: "users", collaborate: "workflow" };
 const chatClock = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hourCycle: "h23", timeZone: "Asia/Shanghai" });
@@ -1209,7 +1232,9 @@ function chatPage() {
         ${mode !== "single" && members.length ? `<span>${members.length} 个模型</span>` : ""}</div></div>
       <div class="chat-mode-switch" role="group" aria-label="对话模式">${modeSwitch}</div>
       <div class="chat-header-tools">${button("chat-open-panel", "", "users", "icon-button chat-members-toggle", `data-id="members" aria-label="成员" title="成员" aria-controls="chat-members-panel" aria-expanded="${chatPanel === "members"}"`)}
-      ${session ? rowActions("会话操作", button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
+      ${session ? rowActions("会话操作",
+        button("rename-session", "重命名对话", "pen", "btn btn-quiet", `data-id="${e(session.id)}"`),
+        button("export-session", "导出会话", "download", "btn btn-quiet", `data-id="${e(session.id)}"`),
         button("pin-session", session.pinned ? "取消置顶" : "置顶会话", "pin", "btn btn-quiet", `data-id="${e(session.id)}"`),
         button("delete-session", "删除会话", "trash", "btn btn-quiet menu-danger", `data-id="${e(session.id)}"`)) : ""}</div>
     </header><div class="messages${session?.messages.length ? "" : " chat-messages-empty"}" id="messages" data-session-id="${e(session?.id || "")}" aria-label="消息记录"><div class="chat-transcript">
@@ -1395,6 +1420,7 @@ function serverSettings() {
     <details class="inline-details connection-details">
       <summary>版本与连接详情</summary>
       <div class="setting-row"><strong>运行版本</strong><code data-server-version>${e(sync?.version?.slice(0, 12) || "静态版")}</code></div>
+      <div class="setting-row"><strong>最近同步</strong><time data-server-synced-at>—</time></div>
       <div class="settings-actions">
         <button type="button" class="btn" data-sync="retry">${icon("refresh")}重新连接</button>
         ${button("connection-help", "模型接入", "arrow", "btn btn-quiet")}
@@ -1448,7 +1474,7 @@ function render() {
           <a class="sync-indicator" href="#settings" data-sync-indicator aria-label="${e(sync?.label || "正在连接")}"><i aria-hidden="true"></i><span class="visually-hidden" data-server-label>${e(sync?.label || "正在连接")}</span></a>
         </div>
       </header>
-      <main class="main${pageLayout}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: () => intel.render(), todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
+      <main class="main${pageLayout}" id="main" tabindex="-1"><div id="sync-conflict" class="sync-banner" ${sync?.conflict ? "" : "hidden"}><span>其他页面有新修改。本页内容已保留，请选择同步版本。</span><button type="button" class="btn" data-action="export-all">导出本页副本</button><button type="button" class="btn" data-sync="use-server">采用服务器版本</button><button type="button" class="btn" data-sync="use-local">保留本页内容</button></div><div id="sync-version" class="sync-banner" ${newServerVersion ? "" : "hidden"}><span>新版本已部署。你的输入仍保留，刷新即可使用。</span><button type="button" class="btn" data-sync="reload">刷新到新版本</button></div>${{ home: () => intel.render(), todo: todoPage, plugins: pluginsPage, prompts: promptsPage, knowledge: knowledgePage, tasks: historyPage, chat: chatPage, settings: settingsPage }[page]()}</main></div></div>`;
   if (showCalls && page === "plugins") app.querySelector(".plugin-recent")?.setAttribute("open", "");
   syncSidebar();
   const messages = document.querySelector("#messages");
@@ -1497,19 +1523,35 @@ function confirmDialog(title, description, label, fn) {
     `<div class="dialog-body"><p>${e(description)}</p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}${button("confirm", e(label), "", "btn btn-danger")}</div></div>`,
   );
 }
-function promptEditor(id = "") {
-  const p = state.prompts.find((p) => p.id === id);
-  openDialog(
-    p ? "编辑提示词" : "新建提示词",
-    `<form id="prompt-form" class="dialog-body" data-id="${p?.id || ""}"><label>名称<input class="input" name="title" maxlength="80" required value="${e(p?.title || "")}" /></label><label>分类<select class="input" name="category">${CATEGORIES.map((c) => `<option ${p?.category === c ? "selected" : ""}>${c}</option>`).join("")}</select></label><label>一句话描述<input class="input" name="description" maxlength="200" value="${e(p?.description || "")}" placeholder="选填" /></label><label>提示词内容<textarea class="input" name="content" maxlength="20000" required>${e(p?.content || "")}</textarea></label><p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${p ? button("delete-prompt", "删除", "trash", "btn btn-danger", `data-id="${p.id}"`) : ""}${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存提示词</button></div></form>`,
-  );
+function conversationMenuFocus(id) {
+  const menu = route().page === "tasks"
+    ? app.querySelector(`[data-history-session="${CSS.escape(id)}"] summary`) || app.querySelector("#history-search")
+    : app.querySelector(".chat-header .row-actions summary");
+  menu?.focus({ preventScroll: true });
+}
+function promptEditor(id = "", initial) {
+  const saved = state.prompts.find(item => item.id === id);
+  if (id && !saved) throw new Error("提示词已不存在。");
+  const draft = saved || initial;
+  const actions = `data-id="${e(id)}"`;
+  openDialog(saved ? "编辑提示词" : "新建提示词",
+    `<form id="prompt-form" class="dialog-body" ${actions}>
+      <label>名称<input class="input" name="title" maxlength="80" required value="${e(draft?.title || "")}"></label>
+      <label>分类<select class="input" name="category">${CATEGORIES.map(category => `<option ${draft?.category === category ? "selected" : ""}>${category}</option>`).join("")}</select></label>
+      <label>一句话描述<input class="input" name="description" maxlength="200" value="${e(draft?.description || "")}" placeholder="选填"></label>
+      <label>提示词内容<textarea class="input" name="content" maxlength="20000" required>${e(draft?.content || "")}</textarea></label>
+      <p class="dialog-error" id="form-error" role="alert"></p>
+      <div class="dialog-actions">${saved ? button("delete-prompt", "删除", "trash", "btn btn-danger", actions) +
+        button("duplicate-prompt", "复制为新提示词", "copy", "btn btn-quiet", actions) : ""}
+        ${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存提示词</button></div>
+    </form>`);
 }
 function showDocument(id) {
   const d = state.documents.find((d) => d.id === id);
   if (!d) return;
   openDialog(
     d.name,
-    `<div class="dialog-body"><p>${e(d.tag)} · ${d.size} 字节</p>${d.kind === "text" ? `<pre class="preview-text">${e(d.content)}</pre><div class="dialog-actions">${button("copy-document", "复制文本", "copy", "btn", `data-id="${d.id}"`)}${button("attach-document", "带入对话", "chat", "btn btn-primary", `data-id="${d.id}"`)}</div>` : notice("此格式仅保存文件信息。可将正文转为 TXT 或 Markdown 后添加。")}</div>`,
+    `<div class="dialog-body"><p>${e(d.tag)} · ${d.size} 字节</p>${d.kind === "text" ? `<pre class="preview-text">${e(d.content)}</pre><div class="dialog-actions">${button("copy-document", "复制文本", "copy", "btn", `data-id="${d.id}"`)}${button("download-document", "下载文本", "download", "btn", `data-id="${d.id}"`)}${button("attach-document", "带入对话", "chat", "btn btn-primary", `data-id="${d.id}"`)}</div>` : notice("此格式仅保存文件信息。可将正文转为 TXT 或 Markdown 后添加。")}</div>`,
   );
 }
 function showSearch() {
@@ -1595,10 +1637,13 @@ function setSearchOption(option) {
   } else input.removeAttribute("aria-activedescendant");
 }
 function draftChat(text, type = "AI 对话") {
-  pendingType = type;
   const input = document.querySelector("#message-input");
-  if (input?.form.dataset.draft === "new") input.value = text;
-  drafts.set("new", text);
+  const existing = input?.form.dataset.draft === "new" ? input.value : drafts.get("new") || "";
+  const next = existing.trim() ? `${existing.trimEnd()}\n\n${text}` : text;
+  if (next.length > 20000) throw new Error("草稿和带入的内容超过 20,000 字。请缩短内容后重试。");
+  pendingType = type;
+  if (input?.form.dataset.draft === "new") input.value = next;
+  drafts.set("new", next);
   go("chat");
   requestAnimationFrame(() =>
     document.querySelector("#message-input")?.focus(),
@@ -1646,16 +1691,24 @@ function syncDocumentResults() {
     document.querySelector("#document-tabs").innerHTML = documentTabs();
   }
 }
-async function addFiles(files) {
+function queueFiles(files) {
+  const cycle = chatAccountCycle;
+  uploadQueue = uploadQueue.then(() => addFiles(files, cycle)).catch(error => toast(error.message, true));
+  return uploadQueue;
+}
+async function addFiles(files, cycle) {
+  if (cycle !== chatAccountCycle) return;
   let count = 0;
   const errors = [];
   for (const file of files) {
+    if (cycle !== chatAccountCycle) return;
     try {
       if (file.size > MAX_FILE_SIZE) throw new Error("超过 1 MB");
       if (file.name.length > 300) throw new Error("文件名过长");
       if (state.documents.length >= 1000) throw new Error("资料数量已达上限");
       const text = /\.(txt|md|markdown|csv|json)$/i.test(file.name);
       const content = text ? await file.text() : "";
+      if (cycle !== chatAccountCycle) return;
       if (
         content.length > MAX_FILE_SIZE ||
         state.documents.reduce((n, d) => n + d.content.length, 0) +
@@ -1681,6 +1734,7 @@ async function addFiles(files) {
       errors.push(`${file.name}：${error.message}`);
     }
   }
+  if (cycle !== chatAccountCycle) return;
   syncDocumentResults();
   const fileInput = document.querySelector("#file-input");
   if (fileInput) fileInput.value = "";
@@ -1784,9 +1838,14 @@ async function handleAction(target) {
         item.pinned = !item.pinned;
         return item.pinned;
       });
-      app.querySelector("#chat-session-list").innerHTML = chatConversationRows(chatSession());
-      const menuItem = app.querySelector('.chat-header [data-action="pin-session"]');
-      if (menuItem?.dataset.id === id) menuItem.lastChild.textContent = pinned ? "取消置顶" : "置顶会话";
+      if (route().page === "tasks") {
+        app.querySelector("#history-results").innerHTML = historyResults();
+        conversationMenuFocus(id);
+      } else {
+        app.querySelector("#chat-session-list").innerHTML = chatConversationRows(chatSession());
+        const menuItem = app.querySelector('.chat-header [data-action="pin-session"]');
+        if (menuItem?.dataset.id === id) menuItem.lastChild.textContent = pinned ? "取消置顶" : "置顶会话";
+      }
       toast(pinned ? "对话已置顶" : "已取消置顶");
       break;
     }
@@ -1983,10 +2042,24 @@ async function handleAction(target) {
     case "prompt-filter":
       promptFilter = id;
       syncPromptResults();
+      app.querySelector(`[data-action="prompt-filter"][data-id="${CSS.escape(id)}"]`)?.focus();
+      break;
+    case "prompt-clear":
+      promptFilter = "全部";
+      promptQuery = "";
+      render();
+      app.querySelector("#prompt-search")?.focus();
       break;
     case "document-filter":
       documentFilter = id;
       syncDocumentResults();
+      app.querySelector(`[data-action="document-filter"][data-id="${CSS.escape(id)}"]`)?.focus();
+      break;
+    case "document-clear":
+      documentFilter = "全部";
+      documentQuery = "";
+      render();
+      app.querySelector("#document-search")?.focus();
       break;
     case "new-prompt":
       promptEditor();
@@ -1994,6 +2067,16 @@ async function handleAction(target) {
     case "view-prompt":
       promptEditor(id);
       break;
+    case "duplicate-prompt": {
+      const fields = new FormData(target.closest("form"));
+      promptEditor("", {
+        title: truncateText(String(fields.get("title")).trim(), 77) + " 副本",
+        category: String(fields.get("category")),
+        description: String(fields.get("description")),
+        content: String(fields.get("content")),
+      });
+      break;
+    }
     case "use-prompt": {
       const p = state.prompts.find((p) => p.id === id);
       if (p) {
@@ -2018,6 +2101,25 @@ async function handleAction(target) {
           toast("提示词已删除");
         },
       );
+      break;
+    }
+    case "history-scope":
+      historyPinned = id === "pinned";
+      render();
+      app.querySelector('[data-action="history-scope"][aria-pressed="true"]')?.focus();
+      break;
+    case "history-clear":
+      historyPinned = false;
+      historyQuery = "";
+      render();
+      app.querySelector("#history-search")?.focus();
+      break;
+    case "rename-session": {
+      const record = state.sessions.find(item => item.id === id);
+      if (!record) throw new Error("这段对话已不存在。");
+      openDialog("重命名对话",
+        `<form id="session-name-form" class="dialog-body" data-id="${e(id)}"><label>对话名称<input class="input" name="title" maxlength="80" required autofocus value="${e(record.title)}"></label>
+          <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存名称</button></div></form>`);
       break;
     }
     case "open-session":
@@ -2099,12 +2201,19 @@ async function handleAction(target) {
       break;
     }
     case "document-tag": {
-      const d = state.documents.find((d) => d.id === id);
-      if (d)
-        openDialog(
-          "给资料添加标签",
-          `<form class="dialog-body" id="tag-form" data-id="${d.id}"><label>标签名称<input class="input" name="tag" required maxlength="30" value="${e(d.tag)}" /></label><p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存标签</button></div></form>`,
-        );
+      const document = state.documents.find(item => item.id === id);
+      if (!document) throw new Error("这份资料已不存在。");
+      openDialog("编辑资料",
+        `<form class="dialog-body" id="tag-form" data-id="${e(id)}">
+          <label>名称<input class="input" name="name" required maxlength="300" value="${e(document.name)}"></label>
+          <label>标签名称<input class="input" name="tag" required maxlength="30" value="${e(document.tag)}"></label>
+          <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存资料</button></div>
+        </form>`);
+      break;
+    }
+    case "download-document": {
+      const record = state.documents.find(item => item.id === id && item.kind === "text");
+      if (record) download(record.name, record.content, "text/plain;charset=utf-8");
       break;
     }
     case "copy-document": {
@@ -2193,6 +2302,7 @@ async function handleAction(target) {
           drafts.clear();
           promptFilter = documentFilter = "全部";
           promptQuery = documentQuery = historyQuery = todoQuery = "";
+          historyPinned = false;
           todoFilter = "全部";
           todoDateFilter = "all";
           render();
@@ -2241,7 +2351,7 @@ document.addEventListener("click", (event) => {
 });
 document.addEventListener("submit", async (event) => {
   const form = event.target;
-  if (!["message-form", "chat-team-form", "prompt-form", "tag-form", "todo-form", "plugin-connect-form", "plugin-tools-form", "plugin-picker-form", "plugin-call-form"].includes(form.id)) return;
+  if (!["message-form", "chat-team-form", "session-name-form", "prompt-form", "tag-form", "todo-form", "plugin-connect-form", "plugin-tools-form", "plugin-picker-form", "plugin-call-form"].includes(form.id)) return;
   event.preventDefault();
   const data = new FormData(form);
   try {
@@ -2258,6 +2368,18 @@ document.addEventListener("submit", async (event) => {
       render();
       if (chatPanel === "members") document.querySelector(".chat-members-close")?.focus();
       else document.querySelector('#message-input')?.focus({ preventScroll: true });
+    } else if (form.id === "session-name-form") {
+      const id = form.dataset.id, title = String(data.get("title")).trim();
+      if (!title || title.length > 80) throw new Error("请输入 1–80 字的对话名称。");
+      mutate(next => {
+        const session = next.sessions.find(item => item.id === id);
+        if (!session) throw new Error("这段对话已不存在。");
+        session.title = title;
+      });
+      closeDialog();
+      render();
+      conversationMenuFocus(id);
+      toast("对话名称已更新");
     } else if (form.id === "todo-form") {
       const id = mutate(next => saveTodo(next, form.dataset.id, {
         title: String(data.get("title")),
@@ -2265,11 +2387,14 @@ document.addEventListener("submit", async (event) => {
         dueDate: String(data.get("dueDate")),
         sourceSessionId: form.dataset.sourceSessionId || undefined,
       }));
-      todoFilter = "全部";
-      todoDateFilter = "all";
-      todoQuery = "";
+      const onTaskPage = route().page === "todo";
+      if (onTaskPage && !form.dataset.id) {
+        todoFilter = "全部";
+        todoDateFilter = "all";
+        todoQuery = "";
+      }
       closeDialog();
-      if (route().page === "todo") {
+      if (onTaskPage) {
         render();
         app.querySelector(`[data-action="edit-todo"][data-id="${CSS.escape(id)}"]`)?.focus();
       }
@@ -2300,16 +2425,19 @@ document.addEventListener("submit", async (event) => {
       render();
       toast("提示词已保存");
     } else {
-      const tag = String(data.get("tag")).trim();
-      if (!tag) throw new Error("标签不能为空。");
-      mutate((next) => {
-        const d = next.documents.find((d) => d.id === form.dataset.id);
-        if (d) d.tag = tag;
+      const name = String(data.get("name")).trim(), tag = String(data.get("tag")).trim();
+      if (!name || !tag) throw new Error("请输入名称和标签。");
+      const previousTag = mutate(next => {
+        const record = next.documents.find(item => item.id === form.dataset.id);
+        if (!record) throw new Error("这份资料已不存在。");
+        const before = record.tag;
+        Object.assign(record, { name, tag });
+        return before;
       });
-      documentFilter = "全部";
+      if (documentFilter === previousTag && documentFilter !== "全部") documentFilter = tag;
       closeDialog();
       syncDocumentResults();
-      toast("标签已更新");
+      toast("资料已更新");
     }
   } catch (error) {
     const output = form.querySelector("#form-error");
@@ -2326,6 +2454,16 @@ document.addEventListener("input", (event) => {
   if (id === "document-search") {
     documentQuery = value;
     syncDocumentResults();
+  }
+  if (id === "plugin-tool-search") {
+    const terms = value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
+    let visible = 0;
+    for (const row of dialog.querySelectorAll(".plugin-tool-row")) {
+      const searchable = (row.dataset.toolName + " " + row.querySelector("label").textContent).toLocaleLowerCase();
+      row.hidden = !terms.every(term => searchable.includes(term));
+      if (!row.hidden) visible++;
+    }
+    dialog.querySelector("#plugin-tool-empty").hidden = visible > 0;
   }
   if (id === "history-search") {
     historyQuery = value;
@@ -2378,11 +2516,11 @@ document.addEventListener("change", async (event) => {
     }
     if (target.id === "file-input" && target.files.length) {
       const files = [...target.files];
-      uploadQueue = uploadQueue.then(() => addFiles(files));
-      await uploadQueue;
+      await queueFiles(files);
     }
     if (target.id === "backup-input" && target.files.length) {
       const file = target.files[0];
+      const cycle = chatAccountCycle;
       if (file.size > 8 * 1024 * 1024)
         throw new Error("备份文件不能超过 8 MB。");
       let next;
@@ -2391,24 +2529,28 @@ document.addEventListener("change", async (event) => {
       } catch {
         throw new Error("不是有效的 JSON 备份文件。");
       }
-      const { validateState } = await import("./core.js");
+      if (cycle !== chatAccountCycle) return;
       if (!validateState(next))
         throw new Error("备份格式不符合智作台的数据规范，未修改当前数据。");
       confirmDialog(
         "恢复这份备份？",
-        `将替换当前本地数据：${next.prompts.length} 个提示词、${next.sessions.length} 段会话、${next.documents.length} 份资料、${(next.todos || []).length} 项任务。建议先导出现有数据。`,
+        `将替换当前工作空间。备份包含 ${next.prompts.length} 个提示词、${next.sessions.length} 段会话、${next.documents.length} 份资料和 ${(next.todos || []).length} 项任务。`,
         "替换并恢复",
         () => {
+          if (cycle !== chatAccountCycle || chatPending) throw new Error("工作空间状态已变化，请结束当前回复并重新选择备份。");
           persist(next);
           drafts.clear();
           promptFilter = documentFilter = "全部";
           promptQuery = documentQuery = historyQuery = todoQuery = "";
+          historyPinned = false;
           todoFilter = "全部";
           todoDateFilter = "all";
           render();
           toast("备份已恢复");
         },
       );
+      const actions = dialog.querySelector(".dialog-actions");
+      actions.insertAdjacentHTML("afterbegin", button("export-all", "先导出当前副本", "download", "btn btn-quiet"));
       target.value = "";
     }
   } catch (error) {
@@ -2540,9 +2682,7 @@ for (const name of ["dragenter", "dragover", "dragleave", "drop"]) {
     );
     if (name === "drop" && event.dataTransfer.files.length) {
       const files = [...event.dataTransfer.files];
-      uploadQueue = uploadQueue
-        .then(() => addFiles(files))
-        .catch((error) => toast(error.message, true));
+      queueFiles(files);
     }
   });
 }
@@ -2575,8 +2715,9 @@ if (initial.warning) toast(initial.warning, true);
 function clearAccountView() {
   intel.clear();
   chatAccountCycle++;
+  uploadQueue = Promise.resolve();
   chatPending = null;
-  pluginConnections = []; pluginHistory = []; pluginError = ""; pluginsLoaded = false; pluginLoading = false; pluginChecked = 0; pluginViewDirty = false;
+  pluginConnections = []; pluginHistory = []; pluginError = ""; pluginsLoaded = false; pluginLoading = null; pluginChecked = 0; pluginViewDirty = false;
   selectedPluginIds.clear(); pluginDetailsCache.clear(); pluginApprovals.clear();
   focusNewConversation = false;
   modelConfigPending = null;
@@ -2591,6 +2732,7 @@ function clearAccountView() {
   chatQuery = chatPanel = "";
   promptFilter = documentFilter = "全部";
   promptQuery = documentQuery = historyQuery = todoQuery = "";
+  historyPinned = false;
   todoFilter = "全部";
   todoDateFilter = "all";
   app.innerHTML = "";

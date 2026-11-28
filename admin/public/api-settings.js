@@ -139,7 +139,9 @@ export function initApiSettings({ api, toast, escape: e, icon, date, number }) {
       const p = providerOf(m.providerId), metric = usage?.byModel?.find(row => row.modelKey === m.id);
       const ready = m.enabled && p?.enabled && (p.authMode === 'none' || p.hasApiKey);
       return `<tr><td><strong>${e(m.name)}</strong>${m.name !== m.modelId ? `<code>${e(m.modelId)}</code>` : ""}</td><td><span class="table-provider">${logo(p)}${e(p?.name)}</span></td><td><button class="model-switch ${m.enabled ? 'on' : ''}" role="switch" aria-checked="${m.enabled}" aria-label="${e(m.enabled ? '停用' : '启用')}模型 ${e(m.modelId)}" data-ms-action="toggle-model" data-id="${e(m.id)}"><span></span></button>${!ready && m.enabled ? '<span class="model-ready-text">连接未就绪</span>' : ''}</td><td class="model-numeric">${number(metric?.todayTokens || 0)}</td><td>${data.defaultModelKey === m.id ? badge('默认模型', 'info') : `<button class="text-btn" data-ms-action="default-model" data-id="${e(m.id)}" ${ready ? '' : 'disabled'}>设为默认</button>`}</td><td class="right"><button class="text-btn" data-ms-action="edit-model" data-id="${e(m.id)}">编辑</button><button class="text-btn model-danger" data-ms-action="delete-model" data-id="${e(m.id)}">移除</button></td></tr>`;
-    }).join('') : '<tr><td colspan="6" class="empty">暂无匹配模型</td></tr>';
+    }).join('') : `<tr><td colspan="6" class="empty">${modelQuery.trim() || modelProvider !== 'all'
+      ? '没有匹配的模型 <button type="button" class="text-btn" data-ms-action="clear-model-filter">清除筛选</button>'
+      : '暂无模型'}</td></tr>`;
   }
   function usageTable() {
     if (!data) return;
@@ -256,6 +258,14 @@ export function initApiSettings({ api, toast, escape: e, icon, date, number }) {
       t.classList.toggle('on', draft.enabled);
       t.setAttribute('aria-checked', String(draft.enabled));
       controls();
+    }
+    else if (action === 'clear-model-filter') {
+      modelQuery = '';
+      modelProvider = 'all';
+      $('model-search').value = '';
+      $('model-provider-filter').value = 'all';
+      modelTable();
+      $('model-search').focus();
     }
     else if (action === 'reload') { if (await discard()) await load(true); }
     else if (action === 'test-provider') await perform(() => post(`/api/model-providers/${selectedId}/test`, { revision: selected().revision }));
