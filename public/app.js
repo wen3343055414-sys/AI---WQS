@@ -122,6 +122,19 @@ const nav = [
   ["tasks", "历史对话", "history"],
   ["settings", "设置", "settings"],
 ];
+const searchScopes = [
+  ["all", "全部"],
+  ["chat", "对话", ["session", "task"]],
+  ["todo", "任务", ["todo"]],
+  ["document", "资料", ["document"]],
+  ["prompt", "提示词", ["prompt"]],
+];
+const searchCommands = [
+  { id: "new-chat", title: "新对话", name: "chat", run: startNewConversation },
+  { id: "new-todo", title: "新建任务", name: "plus", run: () => todoEditor() },
+  { id: "new-prompt", title: "新建提示词", name: "pen", run: () => promptEditor() },
+];
+const searchIcons = { prompt: "layers", session: "chat", document: "file", task: "history", todo: "list" };
 const categoryStyle = {
   写作: ["purple", "pen"],
   营销: ["pink", "megaphone"],
@@ -153,6 +166,7 @@ let pendingType = "AI 对话";
 let focusNewConversation = false;
 let toastTimer;
 let dialogOrigin;
+let searchScope = "all";
 let uploadQueue = Promise.resolve();
 const dialog = document.querySelector("#dialog");
 const app = document.querySelector("#app");
@@ -1396,14 +1410,17 @@ function openDialog(title, content, className = "") {
   if (!dialog.open) dialog.showModal();
 }
 function closeDialog() {
+  const wasSearch = dialog.classList.contains("search-dialog");
   dialog.querySelectorAll("[data-plugin-secret]").forEach(input => { input.value = ""; });
   dialog.close();
+  if (wasSearch) dialog.replaceChildren();
   confirmAction = null;
   if (pluginViewDirty && route().page === "plugins") {
     pluginViewDirty = false;
     render();
     document.querySelector("#page-title")?.focus();
   } else if (dialogOrigin?.isConnected) dialogOrigin.focus();
+  else if (wasSearch) app.querySelector(".search-trigger")?.focus();
 }
 function confirmDialog(title, description, label, fn) {
   confirmAction = fn;
@@ -1428,27 +1445,86 @@ function showDocument(id) {
   );
 }
 function showSearch() {
+  searchScope = "all";
   openDialog(
     "搜索工作空间",
-    `<div class="global-search-input">${icon("search")}<input type="search" id="global-search" aria-label="搜索任务、提示词、历史对话与资料" maxlength="100" placeholder="搜索任务、提示词、历史对话与资料…" autocomplete="off" autofocus /></div><div id="global-results" class="search-results" aria-live="polite"></div>`,
+    `<div class="global-search-input">${icon("search")}<input type="search" id="global-search" role="combobox"
+      aria-label="搜索任务、提示词、对话与资料" aria-controls="global-results" aria-expanded="false"
+      aria-autocomplete="list" maxlength="100" placeholder="搜索工作空间…" autocomplete="off" autofocus /></div>
+    <div class="global-search-scopes" role="group" aria-label="搜索范围">
+      ${searchScopes.map(([id, label]) => button("search-scope", label, "", "global-search-scope",
+        `data-id="${id}" aria-pressed="${id === searchScope}"`)).join("")}
+    </div>
+    <div class="search-results">
+      <div id="global-results" role="listbox" aria-label="搜索结果"></div>
+      <p class="global-search-empty" data-search-empty hidden></p>
+    </div>
+    <span class="visually-hidden" data-search-status aria-live="polite"></span>
+    <div class="search-help" aria-hidden="true"><span><kbd>↑</kbd><kbd>↓</kbd> 选择</span><span><kbd>↵</kbd> 打开</span><span><kbd>Esc</kbd> 关闭</span></div>`,
     "search-dialog",
   );
-  document.querySelector("#global-search").focus();
+  dialog.querySelector("#dialog-title").classList.add("visually-hidden");
+  updateSearch("");
+  dialog.querySelector("#global-search").focus();
 }
-function updateSearch(query) {
-  const results = searchWorkspace(state, query);
-  document.querySelector("#global-results").innerHTML = results.length
-    ? results
-        .map(
-          (r) =>
-            `<button class="search-result" data-action="search-result" data-kind="${r.kind}" data-id="${r.id}">${icon({ prompt: "layers", session: "chat", document: "file", task: "history", todo: "list" }[r.kind])}<span><strong>${e(r.title)}</strong><small>${e(r.label)}</small></span></button>`,
-        )
-        .join("")
-    : empty(
-        "search",
-        query.trim() ? "没有找到相关内容" : "输入关键词",
-        "",
-      );
+function updateSearch(value) {
+  const query = value.trim();
+  const folded = query.toLocaleLowerCase();
+  const words = folded.split(/\s+/);
+  const matches = title => {
+    const name = title.toLocaleLowerCase();
+    return words.every(word => name.includes(word));
+  };
+  const [,, kinds] = searchScopes.find(([id]) => id === searchScope);
+  const shortcuts = searchScope === "all" ? searchCommands.filter(item => matches(item.title))
+    .map(item => ({ ...item, kind: "command" })) : [];
+  if (searchScope === "all" && query) {
+    shortcuts.push(...nav.filter(([, title]) => matches(title))
+      .map(([id, title, name]) => ({ id, title, name, kind: "page" })));
+    const exact = item => Number(item.title.toLocaleLowerCase() === folded);
+    shortcuts.sort((a, b) => exact(b) - exact(a));
+  }
+  const records = searchWorkspace(state, query, { kinds, recent: true, limit: Infinity });
+  const sessionIds = new Set(records.filter(item => item.kind === "session").map(item => item.id));
+  const taskSessions = new Map(state.tasks.map(task => [task.id, task.sessionId]));
+  const results = records.filter(item => {
+    if (item.kind !== "task") return true;
+    const sessionId = taskSessions.get(item.id);
+    if (!sessionId || sessionIds.has(sessionId)) return false;
+    sessionIds.add(sessionId);
+    return true;
+  }).slice(0, 30);
+  const feed = searchScope === "all" && query && sync?.authenticated
+    ? [{ kind: "feed-search", id: "home", title: "在信息流中搜索", name: "globe", excerpt: query }] : [];
+  let index = 0;
+  const group = (label, items, heading = true) => items.length ? `<div class="global-search-group" role="group" aria-label="${label}">
+    ${heading ? `<p aria-hidden="true">${label}</p>` : ""}
+    ${items.map(item => `<button type="button" class="global-search-option" role="option" id="global-option-${index++}"
+      aria-selected="false" tabindex="-1" data-action="search-result" data-kind="${item.kind}" data-id="${e(item.id)}">
+      <span class="global-search-icon">${icon(item.name || searchIcons[item.kind])}</span>
+      <span class="global-search-copy"><strong>${e(item.title)}</strong>${item.excerpt ? `<small>${e(item.excerpt)}</small>` : ""}</span>
+      ${item.label ? `<span class="global-search-label">${e(item.label)}</span>` : icon("arrow")}
+    </button>`).join("")}
+  </div>` : "";
+  const list = dialog.querySelector("#global-results");
+  list.innerHTML = group("快捷操作", shortcuts) + group(query ? "工作空间" : "最近更新", results) + group("信息流", feed, false);
+  const input = dialog.querySelector("#global-search");
+  list.hidden = !index;
+  input.setAttribute("aria-expanded", String(Boolean(index)));
+  const emptyResult = dialog.querySelector("[data-search-empty]");
+  emptyResult.hidden = Boolean(index);
+  emptyResult.textContent = query ? "没有匹配结果" : "输入关键词搜索";
+  dialog.querySelector("[data-search-status]").textContent = index ? `${index} 个选项` : emptyResult.textContent;
+  dialog.querySelector(".search-results").scrollTop = 0;
+  setSearchOption(list.querySelector('[role="option"]'));
+}
+function setSearchOption(option) {
+  const input = dialog.querySelector("#global-search");
+  dialog.querySelector('[aria-selected="true"]')?.setAttribute("aria-selected", "false");
+  if (option) {
+    option.setAttribute("aria-selected", "true");
+    input.setAttribute("aria-activedescendant", option.id);
+  } else input.removeAttribute("aria-activedescendant");
 }
 function draftChat(text, type = "AI 对话") {
   pendingType = type;
@@ -1583,6 +1659,20 @@ function toggleSidebar() {
   }
 }
 
+function startNewConversation() {
+  if (mobile.matches) setMenu(false, false);
+  pendingType = "AI 对话";
+  newChatSetup = emptyChatSetup;
+  chatMentions.delete("new");
+  chatQuery = "";
+  chatPanel = "";
+  drafts.set("new", "");
+  const input = document.querySelector("#message-input");
+  if (input?.form.dataset.draft === "new") input.value = "";
+  focusNewConversation = true;
+  go("chat");
+}
+
 async function handleAction(target) {
   const { action, id } = target.dataset;
   if (chatPending && ['delete-session', 'reset', 'import-backup'].includes(action)) throw new Error('模型正在回复，请等待完成后再修改会话记录。');
@@ -1608,6 +1698,17 @@ async function handleAction(target) {
     case "search":
       showSearch();
       break;
+    case "search-scope": {
+      if (!searchScopes.some(([scope]) => scope === id)) break;
+      searchScope = id;
+      for (const control of dialog.querySelectorAll('[data-action="search-scope"]')) {
+        control.setAttribute("aria-pressed", String(control.dataset.id === id));
+      }
+      const input = dialog.querySelector("#global-search");
+      updateSearch(input.value);
+      input.focus();
+      break;
+    }
     case "pin-session": {
       if (!state.sessions.some(conversation => conversation.id === id)) break;
       const pinned = mutate(next => {
@@ -1622,19 +1723,7 @@ async function handleAction(target) {
       break;
     }
     case "new-chat":
-      if (mobile.matches) setMenu(false, false);
-      pendingType = "AI 对话";
-      newChatSetup = emptyChatSetup;
-      chatMentions.delete("new");
-      chatQuery = "";
-      chatPanel = "";
-      drafts.set("new", "");
-      if (
-        document.querySelector("#message-input")?.form.dataset.draft === "new"
-      )
-        document.querySelector("#message-input").value = "";
-      focusNewConversation = true;
-      go("chat");
+      startNewConversation();
       break;
     case "chat-mode": {
       const setup = chatSetup(session);
@@ -1974,14 +2063,24 @@ async function handleAction(target) {
     }
     case "search-result": {
       const kind = target.dataset.kind;
+      const query = dialog.querySelector("#global-search").value.trim();
       closeDialog();
-      if (kind === "prompt") promptEditor(id);
-      else if (kind === "document") showDocument(id);
-      else if (kind === "session") go("chat", id);
-      else if (kind === "todo") todoEditor(id);
-      else {
-        const task = state.tasks.find((t) => t.id === id);
-        if (task) go("chat", task.sessionId);
+      switch (kind) {
+        case "command": searchCommands.find(item => item.id === id)?.run(); break;
+        case "page": if (nav.some(([page]) => page === id)) go(id); break;
+        case "prompt": promptEditor(id); break;
+        case "document": showDocument(id); break;
+        case "todo": todoEditor(id); break;
+        case "session": go("chat", id); break;
+        case "task": {
+          const task = state.tasks.find(item => item.id === id);
+          if (task) go("chat", task.sessionId);
+          break;
+        }
+        case "feed-search":
+          intel.setView("feed", query);
+          go("home");
+          break;
       }
       break;
     }
@@ -2153,11 +2252,14 @@ document.addEventListener("input", (event) => {
     todoQuery = value;
     document.querySelector("#todo-results").innerHTML = todoResults();
   }
-  if (id === "global-search") updateSearch(value);
+  if (id === "global-search" && !event.isComposing) updateSearch(value);
   if (id === "message-input") {
     drafts.set(event.target.form.dataset.draft, value);
     if (!event.isComposing) updateMentionMenu(mentionFragment(event.target));
   }
+});
+document.addEventListener("compositionend", event => {
+  if (event.target.id === "global-search") updateSearch(event.target.value);
 });
 document.addEventListener("change", async (event) => {
   const target = event.target;
@@ -2222,6 +2324,23 @@ document.addEventListener("change", async (event) => {
   }
 });
 document.addEventListener("keydown", (event) => {
+  if (event.target.id === "global-search") {
+    if (event.isComposing || event.keyCode === 229) return;
+    if (["ArrowDown", "ArrowUp", "Enter"].includes(event.key) && !(event.ctrlKey || event.metaKey || event.altKey)) {
+      event.preventDefault();
+      const options = [...dialog.querySelectorAll('#global-results [role="option"]')];
+      if (!options.length) return;
+      const current = options.findIndex(option => option.getAttribute("aria-selected") === "true");
+      if (event.key === "Enter") options[current]?.click();
+      else {
+        const offset = event.key === "ArrowDown" ? 1 : -1;
+        const option = options[(current + offset + options.length) % options.length];
+        setSearchOption(option);
+        option.scrollIntoView({ block: "nearest" });
+      }
+      return;
+    }
+  }
   if (event.key === "Escape" && dialog.open) {
     event.preventDefault();
     closeDialog();
@@ -2240,9 +2359,14 @@ document.addEventListener("keydown", (event) => {
     if (!event.repeat) toggleSidebar();
     return;
   }
-  if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "k") {
+  if ((event.metaKey || event.ctrlKey) && !event.shiftKey && !event.altKey &&
+    !event.isComposing && event.keyCode !== 229 && event.key.toLowerCase() === "k") {
+    const search = dialog.open && dialog.querySelector("#global-search");
+    if (!search && (document.querySelector("dialog[open]") || document.body.classList.contains("server-locked"))) return;
     event.preventDefault();
-    if (!dialog.open) showSearch();
+    if (search) search.focus();
+    else if (!event.repeat) showSearch();
+    return;
   }
   const mentionMenu = document.querySelector("#chat-mention-menu:not([hidden])");
   if (mentionMenu && !event.isComposing && event.keyCode !== 229) {

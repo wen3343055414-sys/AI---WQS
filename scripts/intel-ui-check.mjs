@@ -82,8 +82,13 @@ try {
 
   await page.getByRole('button', { name: '政策与采购', exact: true }).click();
   assert.equal(await list.locator('.intel-story').count(), 1);
-  await page.getByRole('button', { name: '全部', exact: true }).click();
-  await page.getByRole('searchbox', { name: '搜索信息' }).fill('本地推理');
+  await page.locator('#sidebar a[href="#todo"]').click();
+  await page.getByRole('button', { name: '搜索工作空间', exact: true }).click();
+  await page.locator('#global-search').fill('本地推理');
+  await page.getByRole('option', { name: /在信息流中搜索/ }).click();
+  await page.waitForURL('**/#home');
+  await list.getByRole('link', { name: '开放模型发布新的本地推理工具' }).waitFor();
+  assert.equal(await page.getByRole('searchbox', { name: '搜索信息' }).inputValue(), '本地推理');
   assert.equal(await list.locator('.intel-story').count(), 1);
   await list.getByRole('button', { name: '收藏信息', exact: true }).click();
   await list.getByRole('button', { name: '取消收藏', exact: true }).waitFor();

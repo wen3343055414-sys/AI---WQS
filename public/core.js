@@ -576,48 +576,47 @@ export function retryChatPlanStep(state, taskId, index) {
   delete step.error;
   updatePlanStatus(task);
 }
-export function searchWorkspace(state, query) {
-  const q = query.trim().toLocaleLowerCase();
-  if (!q) return [];
-  const contains = (...parts) =>
-    parts.some((s) => s.toLocaleLowerCase().includes(q));
-  return [
-    ...state.prompts
-      .filter((p) => contains(p.title, p.content, p.category))
-      .map((p) => ({
-        kind: "prompt",
-        id: p.id,
-        title: p.title,
-        label: `提示词 · ${p.category}`,
-      })),
-    ...state.sessions
-      .filter((s) => contains(s.title, ...s.messages.map((m) => m.content)))
-      .map((s) => ({
-        kind: "session",
-        id: s.id,
-        title: s.title,
-        label: "历史对话",
-      })),
-    ...state.documents
-      .filter((d) => contains(d.name, d.tag, d.content))
-      .map((d) => ({
-        kind: "document",
-        id: d.id,
-        title: d.name,
-        label: `知识资料 · ${d.tag}`,
-      })),
-    ...(state.todos || [])
-      .filter(todo => contains(todo.title, todo.notes))
-      .map(todo => ({ kind: "todo", id: todo.id, title: todo.title, label: todo.done ? "任务 · 已完成" : "任务 · 待完成" })),
-    ...state.tasks
-      .filter((t) => contains(t.title, t.type))
-      .map((t) => ({
-        kind: "task",
-        id: t.id,
-        title: t.title,
-        label: t.status === 'demo' ? "对话请求 · 历史演示" : "对话请求 · 模型对话",
-      })),
-  ].slice(0, 30);
+function searchExcerpt(text, term) {
+  const line = text.replace(/\s+/g, " ").trim();
+  const start = Math.max(0, line.toLocaleLowerCase().indexOf(term) - 26);
+  return `${start ? "…" : ""}${line.slice(start, start + 120)}${line.length > start + 120 ? "…" : ""}`;
+}
+
+export function searchWorkspace(state, query, { kinds, recent = false, limit = 30 } = {}) {
+  const phrase = query.trim().replace(/\s+/g, " ").toLocaleLowerCase();
+  const terms = phrase ? [...new Set(phrase.split(" "))] : [];
+  if (!terms.length && !recent) return [];
+  const groups = [
+    ["prompt", state.prompts, null, p => [p.title, `提示词 · ${p.category}`, [p.description, p.content, p.category]]],
+    ["session", state.sessions, "updatedAt", s => [s.title, "历史对话", s.messages.map(m => m.content)]],
+    ["document", state.documents, "createdAt", d => [d.name, `知识资料 · ${d.tag}`, [d.content, d.tag]]],
+    ["todo", state.todos || [], "updatedAt", t => [t.title, t.done ? "任务 · 已完成" : "任务 · 待完成", [t.notes]]],
+    ["task", state.tasks, "createdAt", t => [t.title, t.status === "demo" ? "对话请求 · 历史演示" : "对话请求 · 模型对话", [t.type]]],
+  ];
+  const matches = [];
+  for (const [kind, records, timeField, describe] of groups) {
+    if (kinds && !kinds.includes(kind)) continue;
+    if (!phrase && (!timeField || kind === "task")) continue;
+    for (const item of records) {
+      const time = timeField ? item[timeField] : "";
+      const [title, label, fields] = describe(item);
+      const name = title.toLocaleLowerCase();
+      let missing = terms.filter(term => !name.includes(term));
+      const score = !phrase ? 0 : name === phrase ? 4 : name.startsWith(phrase) ? 3 : missing.length ? 1 : 2;
+      let excerpt = "";
+      for (const text of fields) {
+        if (!missing.length) break;
+        const lower = text.toLocaleLowerCase();
+        const first = missing.find(term => lower.includes(term));
+        if (!first) continue;
+        if (!excerpt) excerpt = searchExcerpt(text, first);
+        missing = missing.filter(term => !lower.includes(term));
+      }
+      if (!missing.length) matches.push({ kind, id: item.id, title, label, excerpt, time, score });
+    }
+  }
+  return matches.sort((a, b) => b.score - a.score || b.time.localeCompare(a.time))
+    .slice(0, phrase ? limit : 4);
 }
 
 

@@ -7,6 +7,7 @@ import {
   saveState,
   validateState,
   recordExchange,
+  saveTodo,
   removeSession,
   searchWorkspace,
   markdown,
@@ -123,6 +124,19 @@ test("全局搜索覆盖模板、会话正文、知识正文与任务", () => {
   );
   assert.equal(searchWorkspace(state, "工作周报")[0].kind, "prompt");
   assert.equal(searchWorkspace(state, "   ").length, 0);
+});
+
+test("全局搜索优先匹配名称，可按范围查找跨字段关键词并截取命中正文", () => {
+  const state = createInitialState();
+  const nameMatch = saveTodo(state, "", { title: "部署 CI" }, "2026-11-25T08:00:00.000Z");
+  const noteMatch = saveTodo(state, "", { title: "部署后一项检查", notes: "前文".repeat(90) + "\n通过 ci 后再继续。" },
+    "2026-11-26T08:00:00.000Z");
+  const results = searchWorkspace(state, "  部署   ci ", { kinds: ["todo"] });
+  assert.deepEqual(results.map(item => item.id), [nameMatch, noteMatch]);
+  assert.match(results[1].excerpt, /^….*通过 ci 后再继续。/);
+  assert.deepEqual(searchWorkspace(state, "部署 不存在", { kinds: ["todo"] }), []);
+  assert.deepEqual(searchWorkspace(state, "部署", { kinds: ["prompt"] }), []);
+  assert.deepEqual(searchWorkspace(state, "", { kinds: ["todo"], recent: true }).map(item => item.id), [noteMatch, nameMatch]);
 });
 
 test("导入数据仅接受标准时间戳，拒绝可注入属性的日期字符串", () => {
