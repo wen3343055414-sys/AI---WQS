@@ -42,6 +42,8 @@ try {
   await page.goto(base, { waitUntil: "networkidle" });
   const modal = page.locator(".server-access");
   await page.locator(".server-access[open]").waitFor();
+  await page.keyboard.press("Control+k");
+  assert.equal(await page.locator("#dialog[open]").count(), 0);
   assert.doesNotMatch(await modal.innerText(), /本机|服务器|数据库/);
   assert.equal(await page.getByRole("tab").count(), 3);
   assert.equal(await page.locator("#auth-account").inputValue(), "admin");
@@ -153,6 +155,41 @@ try {
     assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-label"), expanded ? "收起侧边栏" : "展开侧边栏");
     assert.equal(await page.locator("[data-menu-button]").getAttribute("title"), expanded ? "收起侧边栏" : "展开侧边栏");
   };
+  const launchSearch = page.getByRole("button", { name: "搜索工作空间", exact: true });
+  const quickInput = page.getByRole("combobox", { name: "搜索任务、提示词、对话与资料" });
+  const quickResults = page.getByRole("listbox", { name: "搜索结果" });
+  await launchSearch.click();
+  await quickInput.waitFor();
+  assert.ok(await quickInput.evaluate(element => element === document.activeElement));
+  await page.screenshot({ path: path.join(output, "quick-search-desktop.png") });
+  await quickInput.press("ArrowDown");
+  await quickResults.getByRole("option", { name: "新建任务", selected: true }).waitFor();
+  await quickInput.dispatchEvent("keydown", { key: "Enter", isComposing: true, bubbles: true });
+  assert.equal(await page.locator("#todo-form").count(), 0);
+  await quickInput.press("Enter");
+  await page.locator("#todo-form").waitFor();
+  await page.getByRole("button", { name: "取消", exact: true }).click();
+  assert.ok(await launchSearch.evaluate(element => element === document.activeElement));
+  await page.keyboard.press("Control+k");
+  await quickInput.fill("椰风计划");
+  await quickResults.getByRole("option", { name: /整理产品方案.*椰风计划/ }).waitFor();
+  await page.locator('[data-action="search-scope"][data-id="todo"]').click();
+  await page.locator("[data-search-empty]").filter({ hasText: "没有匹配结果" }).waitFor();
+  assert.equal(await quickInput.getAttribute("aria-activedescendant"), null);
+  await page.locator('[data-action="search-scope"][data-id="chat"]').click();
+  assert.equal(await quickInput.inputValue(), "椰风计划");
+  assert.equal(await quickResults.getByRole("option").count(), 1);
+  await quickInput.press("Enter");
+  await page.waitForURL("**/#chat/" + olderSessionId);
+  await launchSearch.click();
+  await quickInput.press("Escape");
+  assert.ok(await launchSearch.evaluate(element => element === document.activeElement));
+  await launchSearch.click();
+  await quickInput.fill("任务");
+  await quickResults.getByRole("option", { name: "任务", exact: true, selected: true }).waitFor();
+  await quickInput.press("Enter");
+  await page.waitForURL("**/#todo");
+
   await page.goto(base + "/#chat/" + olderSessionId);
   await page.locator("#messages .message").nth(3).waitFor();
   await waitDesktopSidebar(true);
@@ -528,6 +565,17 @@ try {
     await page.setViewportSize({ width, height: 844 });
     await page.goto(base + "/#home");
     assert.equal(await page.locator("[data-menu-button]").getAttribute("aria-expanded"), "false");
+    await launchSearch.click();
+    await quickInput.fill("整理");
+    await quickResults.getByRole("option", { name: /整理产品方案/ }).waitFor();
+    const palette = await page.locator("#dialog").evaluate(element => {
+      const box = element.getBoundingClientRect();
+      return { left: box.left, right: box.right, viewport: innerWidth, content: element.scrollWidth, client: element.clientWidth };
+    });
+    assert.ok(palette.left >= 0 && palette.right <= palette.viewport && palette.content <= palette.client,
+      "Search must fit mobile width " + JSON.stringify(palette));
+    if (width === 320) await page.screenshot({ path: path.join(output, "quick-search-mobile.png") });
+    await page.getByRole("button", { name: "关闭弹窗", exact: true }).click();
     await page.screenshot({ path: path.join(output, "sidebar-closed-mobile-" + width + ".png") });
     await page.getByRole("button", { name: "展开侧边栏", exact: true }).click();
     await page.waitForFunction(() => document.querySelector("#sidebar").getBoundingClientRect().left >= -0.5);
@@ -625,6 +673,11 @@ try {
   await page.locator("#messages .message").nth(3).waitFor();
   assert.equal(await page.locator("body").getAttribute("data-theme"), "dark");
   await page.screenshot({ path: path.join(output, "sidebar-dark-desktop.png"), style: "#toast { visibility: hidden }" });
+  await launchSearch.click();
+  await quickInput.fill("椰风计划");
+  await quickResults.getByRole("option", { name: /整理产品方案.*椰风计划/ }).waitFor();
+  await page.screenshot({ path: path.join(output, "quick-search-dark.png") });
+  await quickInput.press("Escape");
   await selectTheme("浅色");
   await page.goto(base + "/#chat/" + olderSessionId);
   await page.locator("#messages .message").nth(3).waitFor();
@@ -648,6 +701,7 @@ try {
     await page.getByRole("button", { name: "去登录", exact: true }).click();
   }
   assert.deepEqual(errors, []);
+  console.log("Quick search passed: keyboard navigation, IME, scopes, content matches, creation commands, restored focus, and mobile layout.");
   console.log("Sidebar verification passed: restored single-column navigation, complete desktop collapse, shortcuts, retained drafts, mobile drawer focus, and searchable pinned conversations inside chat.");
   console.log("Task and plugin catalog checks passed: navigation order, help relocation, create/edit/complete/filter/delete, real connection entry, masked credentials, empty account catalog and mobile layouts.");
   console.log("Navigation and conversation history passed: removed sidebar note, primary new conversation, retained drafts, unique session entries, body search, continue/export/reload, and mobile navigation. Settings account management passed: bottom settings entry, workspace relocation, failed/cancelled login, account and registration switching, draft protection and mobile layouts. Blue authentication UI passed, including recovery guidance, clear unavailable SMS state and account-only remembering: three login methods, registration, account/email login, legacy data, account isolation, password visibility, keyboard tabs, and 320/390px layouts.");

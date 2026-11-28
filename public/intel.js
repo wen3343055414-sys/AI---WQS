@@ -353,9 +353,10 @@ export class IntelligenceView {
       same?.focus({ preventScroll: true });
     }
   }
-  setView(view) {
+  setView(view, query = '') {
     this.view = view;
-    this.query = this.topic = this.source = '';
+    this.query = query;
+    this.topic = this.source = '';
     this.todayOnly = false;
     this.limit = 12;
     this.update(true);
