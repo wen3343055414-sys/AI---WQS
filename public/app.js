@@ -51,6 +51,7 @@ const paths = {
   history: '<path d="M3 11a9 9 0 1 1 2.6 7.4M3 4v7h7M12 7v5l3 2"/>',
   settings:
     '<path d="m9 3-1 3-3 1-2 4 2 3v4l4 2 3-1 3 1 4-2v-4l2-3-2-4-3-1-1-3Z"/><circle cx="12" cy="12" r="3"/>',
+  calendar: '<rect x="4" y="6" width="16" height="14" rx="2"/><path d="M8 4v4m8-4v4M4 11h16"/>',
   search: '<circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
   pin: '<path d="m14 3 7 7-3 1-3 3-1 4-8-8 4-1 3-3 1-3ZM10 14l-6 6"/>',
@@ -143,6 +144,7 @@ const categoryStyle = {
   学习: ["green", "book"],
 };
 const todoFilters = [["全部", "全部任务", "layers"], ["待完成", "待完成", "history"], ["已完成", "已完成", "check"]];
+const todoDateFilters = [["all", "全部日期"], ["overdue", "已逾期"], ["today", "今天到期"], ["week", "未来 7 天"], ["none", "未设日期"]];
 const initial = readState({ getItem: (key) => localStorage.getItem(key) });
 let state = initial.state;
 let sync;
@@ -155,6 +157,7 @@ let promptFilter = "全部",
   documentQuery = "",
   historyQuery = "",
   todoFilter = "全部",
+  todoDateFilter = "all",
   todoQuery = "";
 let pluginConnections = [], pluginHistory = [], pluginError = "", pluginsLoaded = false, pluginLoading = false, pluginChecked = 0, pluginViewDirty = false;
 const selectedPluginIds = new Set(), pluginDetailsCache = new Map(), pluginApprovals = new Map();
@@ -638,23 +641,70 @@ function knowledgePage() {
     <div class="toolbar"><div id="document-tabs">${documentTabs()}</div>${searchField("document-search", "搜索资料…", documentQuery)}</div>
     <div id="document-results" aria-live="polite">${documentResults()}</div>`;
 }
+const todoDay = new Intl.DateTimeFormat("en-CA", {
+  year: "numeric", month: "2-digit", day: "2-digit", timeZone: "Asia/Shanghai",
+});
+
+function todoDateRange() {
+  const parts = todoDay.formatToParts(new Date());
+  const today = ["year", "month", "day"].map(type => parts.find(part => part.type === type).value).join("-");
+  const nextWeek = new Date(today);
+  nextWeek.setUTCDate(nextWeek.getUTCDate() + 7);
+  return [today, nextWeek.toISOString().slice(0, 10)];
+}
+
+function matchesTodoDate(todo, today, nextWeek) {
+  if (todoDateFilter === "all") return true;
+  if (todoDateFilter === "none") return !todo.dueDate;
+  if (todo.done || !todo.dueDate) return false;
+  if (todoDateFilter === "today") return todo.dueDate === today;
+  if (todoDateFilter === "overdue") return todo.dueDate < today;
+  return todo.dueDate > today && todo.dueDate <= nextWeek;
+}
+
+function compareTodos(one, two) {
+  if (one.done !== two.done) return Number(one.done) - Number(two.done);
+  if (!one.done && one.dueDate !== two.dueDate) {
+    return Number(!one.dueDate) - Number(!two.dueDate) || (one.dueDate || "").localeCompare(two.dueDate || "");
+  }
+  return two.updatedAt.localeCompare(one.updatedAt);
+}
+
+function todoDetails(todo, today, sources) {
+  const { dueDate, sourceSessionId } = todo;
+  let deadline = "";
+  if (dueDate) {
+    const date = dueDate.slice(0, 4) === today.slice(0, 4) ? dateText(dueDate) : dueDate;
+    const late = !todo.done && dueDate < today;
+    const current = !todo.done && dueDate === today;
+    const label = late ? `已逾期 · ${date}` : current ? "今天到期" : `${date} 截止`;
+    deadline = `<time class="todo-deadline${late ? " is-overdue" : current ? " is-today" : ""}" datetime="${e(dueDate)}" title="截止日期 ${e(dueDate)}">${icon("calendar")}${e(label)}</time>`;
+  }
+  const source = sources.has(sourceSessionId)
+    ? `<a class="todo-source" href="#chat/${e(sourceSessionId)}" title="${e(sources.get(sourceSessionId))}">${icon("chat")}原对话</a>` : "";
+  return deadline || source ? `<div class="todo-details">${deadline}${source}</div>` : "";
+}
+
 function todoResults() {
   const query = todoQuery.trim().toLocaleLowerCase();
+  const [today, nextWeek] = todoDateRange();
   const items = (state.todos || []).filter(todo =>
     (todoFilter === "全部" || todo.done === (todoFilter === "已完成")) &&
+    matchesTodoDate(todo, today, nextWeek) &&
     (!query || (todo.title + " " + todo.notes).toLocaleLowerCase().includes(query)))
-    .sort((one, two) => Number(one.done) - Number(two.done) || two.updatedAt.localeCompare(one.updatedAt));
+    .sort(compareTodos);
   if (!items.length) {
-    const filtered = Boolean(query) || todoFilter !== "全部";
+    const filtered = Boolean(query) || todoFilter !== "全部" || todoDateFilter !== "all";
     return `<div class="todo-empty">
       <span class="todo-empty-icon">${icon(filtered ? "search" : "list")}</span>
       <p>${filtered ? "没有符合条件的任务" : "暂无任务"}</p>
       ${filtered ? button("todo-clear", "清除筛选", "", "btn btn-tinted") : ""}
     </div>`;
   }
+  const sources = new Map(state.sessions.map(session => [session.id, session.title]));
   return '<div class="todo-list">' + items.map(todo => `<article class="todo-item ${todo.done ? "is-done" : ""}" data-todo-id="${e(todo.id)}">
     ${button("toggle-todo", icon("check"), "", "todo-toggle", `data-id="${e(todo.id)}" role="checkbox" aria-checked="${todo.done}" aria-label="${todo.done ? "恢复待办" : "标记完成"}：${e(todo.title)}"`)}
-    <div class="todo-copy"><h2>${e(todo.title)}</h2>${todo.notes ? `<p>${e(todo.notes)}</p>` : ""}</div>
+    <div class="todo-copy"><h2>${e(todo.title)}</h2>${todo.notes ? `<p>${e(todo.notes)}</p>` : ""}${todoDetails(todo, today, sources)}</div>
     <time class="todo-time" datetime="${e(todo.updatedAt)}" title="更新时间">${dateText(todo.updatedAt, true)}</time>
     <div class="todo-actions">${iconButton("edit-todo", `编辑任务：${todo.title}`, "pen", `data-id="${e(todo.id)}"`)}${iconButton("delete-todo", `删除任务：${todo.title}`, "trash", `data-id="${e(todo.id)}"`)}</div>
   </article>`).join("") + "</div>";
@@ -681,7 +731,12 @@ function todoPage() {
     </div>
     <section class="todo-panel" aria-label="任务列表">
       <div class="todo-toolbar">
-        ${searchField("todo-search", "搜索任务…", todoQuery)}
+        <div class="todo-query-controls">
+          ${searchField("todo-search", "搜索任务…", todoQuery)}
+          <select class="input todo-date-filter" id="todo-date-filter" aria-label="截止日期筛选" aria-controls="todo-results">
+            ${todoDateFilters.map(([value, label]) => `<option value="${value}"${todoDateFilter === value ? " selected" : ""}>${label}</option>`).join("")}
+          </select>
+        </div>
         ${items.length ? `<div class="todo-progress"><progress max="${items.length}" value="${completed}" aria-label="任务完成进度"></progress><span>${completed}/${items.length} 完成</span></div>` : ""}
       </div>
       <div id="todo-results" aria-live="polite">${todoResults()}</div>
@@ -836,12 +891,25 @@ async function pluginPicker() {
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit" ${connections.length ? "" : "disabled"}>应用</button></div></form>`);
 }
 
-function todoEditor(id = "") {
+function truncateTaskText(text, limit) {
+  return text.length <= limit ? text : text.slice(0, limit - 1).replace(/[\uD800-\uDBFF]$/, "") + "…";
+}
+
+function todoEditor(id = "", sourceMessage) {
   const todo = (state.todos || []).find(item => item.id === id);
   if (id && !todo) throw new Error("任务已不存在，请刷新后重试。");
+  const sourceSessionId = todo?.sourceSessionId || sourceMessage?.sessionId || "";
+  const source = state.sessions.find(item => item.id === sourceSessionId);
+  const text = sourceMessage?.content.trim() || "";
+  const firstLine = text.split(/\r?\n/, 1)[0].replace(/^(?:#{1,6}|[-+*])\s+/, "").trim();
+  const title = todo?.title ?? truncateTaskText(firstLine || (sourceMessage ? source?.title || "" : ""), 100);
+  const notes = todo?.notes ?? truncateTaskText(text, 2000);
   openDialog(todo ? "编辑任务" : "新建任务",
-    `<form id="todo-form" class="dialog-body" data-id="${e(id)}"><label>任务名称<input class="input" name="title" maxlength="100" required value="${e(todo?.title || "")}" autofocus /></label>
-    <label>备注<textarea class="input" name="notes" maxlength="2000" placeholder="选填">${e(todo?.notes || "")}</textarea></label>
+    `<form id="todo-form" class="dialog-body" data-id="${e(id)}" data-source-session-id="${e(sourceSessionId)}">
+    ${source ? `<div class="todo-form-source">${icon("chat")}<span>来自「${e(source.title)}」</span></div>` : ""}
+    <label>任务名称<input class="input" name="title" maxlength="100" required value="${e(title)}" autofocus /></label>
+    <label>截止日期<input class="input" name="dueDate" type="date" min="0001-01-01" max="9999-12-31" value="${e(todo?.dueDate || "")}" /></label>
+    <label>备注<textarea class="input" name="notes" maxlength="2000" placeholder="选填">${e(notes)}</textarea></label>
     <p class="dialog-error" id="form-error" role="alert"></p><div class="dialog-actions">${button("close-dialog", "取消", "", "btn")}<button class="btn btn-primary" type="submit">保存任务</button></div></form>`);
 }
 async function handlePluginForm(form, data) {
@@ -1122,7 +1190,7 @@ function chatTranscript(session) {
       ${user ? '<span class="chat-user-avatar" aria-hidden="true">我</span>' : chatModelAvatar(name, author?.provider)}
       <div class="message-body"><div class="message-label"><strong>${e(name)}</strong>${role ? `<span class="message-role">${e(role)}</span>` : ""}<time datetime="${e(message.createdAt)}">${chatClock.format(date)}</time></div>
       <div class="message-content">${user ? `${message.mention ? `<strong class="message-mention">@${e(message.mention)}</strong> ` : ""}${e(message.content)}` : markdown(message.content)}</div>
-      <div class="message-actions">${iconButton("copy-message", "复制消息", "copy", `data-id="${e(message.id)}"`)}${!user && !author ? iconButton("regenerate", "重新生成", "refresh", `data-id="${e(message.id)}"`) : ""}</div></div></article>`;
+      <div class="message-actions">${iconButton("copy-message", "复制消息", "copy", `data-id="${e(message.id)}"`)}${iconButton("message-to-todo", "添加到任务", "list", `data-id="${e(message.id)}"`)}${!user && !author ? iconButton("regenerate", "重新生成", "refresh", `data-id="${e(message.id)}"`) : ""}</div></div></article>`;
   }).join("");
 }
 function chatPage() {
@@ -1764,6 +1832,12 @@ async function handleAction(target) {
     case "new-todo":
       todoEditor();
       break;
+    case "message-to-todo": {
+      const message = session?.messages.find(item => item.id === id);
+      if (!message) throw new Error("原消息已不存在，请刷新后重试。");
+      todoEditor("", { sessionId: session.id, content: message.content });
+      break;
+    }
     case "edit-todo":
       todoEditor(id);
       break;
@@ -1794,11 +1868,14 @@ async function handleAction(target) {
       document.querySelector('#todo-tabs [aria-pressed="true"]')?.focus();
       break;
     case "todo-clear": {
-      const fromSearch = Boolean(todoQuery.trim());
+      let focus = '#todo-tabs [aria-pressed="true"]';
+      if (todoQuery.trim()) focus = "#todo-search";
+      else if (todoDateFilter !== "all") focus = "#todo-date-filter";
       todoFilter = "全部";
+      todoDateFilter = "all";
       todoQuery = "";
       render();
-      document.querySelector(fromSearch ? "#todo-search" : '#todo-tabs [aria-pressed="true"]')?.focus();
+      document.querySelector(focus)?.focus();
       break;
     }
     case "plugins-refresh":
@@ -2117,6 +2194,7 @@ async function handleAction(target) {
           promptFilter = documentFilter = "全部";
           promptQuery = documentQuery = historyQuery = todoQuery = "";
           todoFilter = "全部";
+          todoDateFilter = "all";
           render();
           toast("工作台已重置");
         },
@@ -2181,11 +2259,20 @@ document.addEventListener("submit", async (event) => {
       if (chatPanel === "members") document.querySelector(".chat-members-close")?.focus();
       else document.querySelector('#message-input')?.focus({ preventScroll: true });
     } else if (form.id === "todo-form") {
-      mutate(next => saveTodo(next, form.dataset.id, { title: String(data.get("title")), notes: String(data.get("notes")) }));
+      const id = mutate(next => saveTodo(next, form.dataset.id, {
+        title: String(data.get("title")),
+        notes: String(data.get("notes")),
+        dueDate: String(data.get("dueDate")),
+        sourceSessionId: form.dataset.sourceSessionId || undefined,
+      }));
       todoFilter = "全部";
+      todoDateFilter = "all";
       todoQuery = "";
       closeDialog();
-      render();
+      if (route().page === "todo") {
+        render();
+        app.querySelector(`[data-action="edit-todo"][data-id="${CSS.escape(id)}"]`)?.focus();
+      }
       toast("任务已保存");
     } else if (form.id === "prompt-form") {
       const title = String(data.get("title")).trim(),
@@ -2264,6 +2351,10 @@ document.addEventListener("compositionend", event => {
 document.addEventListener("change", async (event) => {
   const target = event.target;
   try {
+    if (target.id === "todo-date-filter" && todoDateFilters.some(([value]) => value === target.value)) {
+      todoDateFilter = target.value;
+      document.querySelector("#todo-results").innerHTML = todoResults();
+    }
     if (target.name === "members" && target.form?.id === "chat-team-form") syncChatTeamForm(target.form);
     if (target.id === "plugin-auth-mode") {
       const token = document.querySelector('#plugin-connect-form [name="token"]');
@@ -2313,6 +2404,7 @@ document.addEventListener("change", async (event) => {
           promptFilter = documentFilter = "全部";
           promptQuery = documentQuery = historyQuery = todoQuery = "";
           todoFilter = "全部";
+          todoDateFilter = "all";
           render();
           toast("备份已恢复");
         },
@@ -2500,6 +2592,7 @@ function clearAccountView() {
   promptFilter = documentFilter = "全部";
   promptQuery = documentQuery = historyQuery = todoQuery = "";
   todoFilter = "全部";
+  todoDateFilter = "all";
   app.innerHTML = "";
   render();
 }

@@ -152,6 +152,9 @@ const isTime = (v) =>
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(v) &&
   Number.isFinite(Date.parse(v)) &&
   new Date(v).toISOString() === v;
+const isCalendarDate = (value) =>
+  typeof value === "string" && /^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value) &&
+  new Date(value).toJSON()?.slice(0, 10) === value;
 const isId = (v) => typeof v === "string" && /^[a-zA-Z0-9_-]{1,100}$/.test(v);
 const isModelKey = (v) => typeof v === "string" && /^model_[A-Za-z0-9_-]{1,64}$/.test(v);
 const isChatRole = role => typeof role === "string" && Object.hasOwn(CHAT_ROLES, role);
@@ -198,7 +201,9 @@ export function validateState(value) {
     !Array.isArray(value.todos) || value.todos.length > 1000 || !uniqueIds(value.todos) ||
     !value.todos.every(todo => isId(todo.id) && isText(todo.title, 100) && Boolean(todo.title.trim()) &&
       isText(todo.notes, 2000) && typeof todo.done === "boolean" &&
-      isTime(todo.createdAt) && isTime(todo.updatedAt))
+      isTime(todo.createdAt) && isTime(todo.updatedAt) &&
+      (todo.dueDate === undefined || isCalendarDate(todo.dueDate)) &&
+      (todo.sourceSessionId === undefined || isId(todo.sourceSessionId)))
   )) return false;
   if (
     !["prompts", "sessions", "documents", "tasks"].every(
@@ -629,13 +634,22 @@ export function saveTodo(state, id, fields, now = new Date().toISOString()) {
   const todo = items.find(item => item.id === id);
   if (id && !todo) throw new Error("任务已不存在，请刷新后重试。");
   if (!id && items.length >= 1000) throw new Error("任务已达上限，请先导出并清理已完成任务。");
-  if (todo) Object.assign(todo, { title, notes, updatedAt: now });
-  else {
-    const created = { id: uid("todo"), title, notes, done: false, createdAt: now, updatedAt: now };
-    state.todos = [created, ...items];
-    return created.id;
+  const { dueDate, sourceSessionId } = fields;
+  if (dueDate !== undefined && dueDate !== "" && !isCalendarDate(dueDate))
+    throw new Error("请选择有效的截止日期。");
+  if (!todo && sourceSessionId !== undefined &&
+      (!isId(sourceSessionId) || !state.sessions.some(session => session.id === sourceSessionId)))
+    throw new Error("原对话已不存在，请刷新后重试。");
+
+  const item = todo || { id: uid("todo"), done: false, createdAt: now };
+  Object.assign(item, { title, notes, updatedAt: now });
+  if (dueDate === "") delete item.dueDate;
+  else if (dueDate !== undefined) item.dueDate = dueDate;
+  if (!todo) {
+    if (sourceSessionId !== undefined) item.sourceSessionId = sourceSessionId;
+    state.todos = [item, ...items];
   }
-  return todo.id;
+  return item.id;
 }
 export function setTodoDone(state, id, done, now = new Date().toISOString()) {
   const todo = state.todos?.find(item => item.id === id);
