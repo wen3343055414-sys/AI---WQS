@@ -18,6 +18,9 @@ A, B = 'a' * 40, 'b' * 40
 
 class UpdaterNetworkTests(unittest.TestCase):
     def setUp(self):
+        credential = patch.object(bootstrap, 'github_credential', return_value=None)
+        self.credential = credential.start()
+        self.addCleanup(credential.stop)
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -99,6 +102,107 @@ class UpdaterNetworkTests(unittest.TestCase):
                 self.service.github('git/ref/heads/main')
         self.assertEqual(deferred.exception.retry_at, 5000)
         run.assert_not_called()
+
+    def test_existing_sign_in_uses_its_own_budget_and_keeps_the_secret_out_of_arguments(self):
+        self.service.save_network(self.service.network_state() | {
+            'retryAt': 5000, 'nextPollAt': 4000, 'limitScope': 'anonymous'})
+        self.credential.return_value = 'fixture-token'
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response()) as run:
+            self.assertEqual(self.service.github('actions/runs')['object']['sha'], B)
+        arguments = run.call_args.args[0]
+        self.assertNotIn('fixture-token', ' '.join(arguments))
+        self.assertEqual(run.call_args.kwargs['input'], 'Authorization: Bearer fixture-token\n')
+        self.assertIn('@-', arguments)
+        self.assertNotIn('--location', arguments)
+        self.assertEqual(arguments[1], '--disable')
+        state = self.module.read_json(self.root / 'github-network.json')
+        self.assertEqual(state['authentication'], 'git-credential')
+        self.assertNotIn('retryAt', state)
+        self.assertNotIn('fixture-token', (self.root / 'github-network.json').read_text())
+        self.assertEqual(state['nextPollAt'], 1300)
+        self.credential.assert_called_once_with(self.service.config)
+
+    def test_authenticated_rate_limit_survives_restarts_and_is_not_retried_anonymously(self):
+        self.credential.return_value = 'fixture-token'
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response(
+                    403, 'X-RateLimit-Remaining: 0\nX-RateLimit-Reset: 5000\n', code=22)) as run:
+            with self.assertRaises(bootstrap.UpdateDeferred):
+                self.service.github('actions/runs')
+            second = self.module.Deployment(self.root)
+            with self.assertRaises(bootstrap.UpdateDeferred):
+                second.github('git/ref/heads/main')
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(second.network_state()['authentication'], 'git-credential')
+
+    def test_successful_git_check_clears_a_stale_anonymous_wait_for_an_existing_sign_in(self):
+        self.service.save_network(self.service.network_state() | {'retryAt': 5000, 'limitScope': 'anonymous'})
+        self.credential.return_value = 'fixture-token'
+        self.service.docker = Mock()
+        self.service.maintain = Mock()
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run', return_value=
+                             subprocess.CompletedProcess([], 0, A + '\trefs/heads/main\n', '')) as run:
+            self.assertEqual(self.service.update(), {'status': 'current', 'currentSha': A})
+        self.assertEqual(run.call_count, 1)
+        self.assertEqual(self.service.network_state()['authentication'], 'git-credential')
+        self.assertNotIn('retryAt', self.service.network_state())
+
+    def test_api_redirects_are_refused_and_other_hosts_never_receive_credentials(self):
+        self.credential.return_value = 'fixture-token'
+        with patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response(302)) as run:
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 302'):
+                self.service.github('actions/runs')
+        self.assertNotIn('--location', run.call_args.args[0])
+        with patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response()) as run:
+            self.service.download('https://codeload.github.com/example/workbench/zip/' + B, self.root / 'zip')
+        self.assertNotIn('--header', run.call_args.args[0])
+        self.assertIsNone(run.call_args.kwargs['input'])
+        self.assertIn('--location', run.call_args.args[0])
+
+    def test_secondary_and_unknown_cooldowns_survive_changes_in_authentication(self):
+        for state in ({'retryAt': 5000}, {'retryAt': 5000, 'limitScope': 'shared'},
+                      {'retryAt': 5000, 'limitScope': 'git-credential', 'authentication': 'git-credential'}):
+            with self.subTest(state=state):
+                self.service.save_network(self.service.network_state() | state)
+                self.credential.return_value = 'fixture-token' if 'authentication' not in state else None
+                service = self.module.Deployment(self.root)
+                with patch.object(bootstrap.time, 'time', return_value=1000), \
+                        patch.object(bootstrap.subprocess, 'run') as run:
+                    with self.assertRaises(bootstrap.UpdateDeferred):
+                        service.github('git/ref/heads/main')
+                run.assert_not_called()
+
+    def test_retry_after_remains_shared_even_when_remaining_is_zero(self):
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response(
+                    429, 'Retry-After: 120\nX-RateLimit-Remaining: 0\nX-RateLimit-Reset: 5000\n', code=22)):
+            with self.assertRaises(bootstrap.UpdateDeferred):
+                self.service.github('actions/runs')
+        self.assertEqual(self.service.network_state()['limitScope'], 'shared')
+        self.credential.return_value = 'fixture-token'
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run') as run:
+            with self.assertRaises(bootstrap.UpdateDeferred):
+                self.module.Deployment(self.root).github('actions/runs')
+        run.assert_not_called()
+
+    def test_429_without_retry_after_is_also_treated_as_a_shared_wait(self):
+        with patch.object(bootstrap.time, 'time', return_value=1000), \
+                patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response(
+                    429, 'X-RateLimit-Remaining: 0\nX-RateLimit-Reset: 5000\n', code=22)):
+            with self.assertRaises(bootstrap.UpdateDeferred):
+                self.service.github('actions/runs')
+        self.assertEqual(self.service.network_state()['limitScope'], 'shared')
+
+    def test_rejected_sign_in_is_reported_without_exposing_or_deleting_it(self):
+        self.credential.return_value = 'fixture-token'
+        with patch.object(bootstrap.subprocess, 'run', side_effect=self.curl_response(401, code=22)) as run:
+            with self.assertRaisesRegex(RuntimeError, 'HTTP 401') as error:
+                self.service.github('actions/runs')
+        self.assertNotIn('fixture-token', str(error.exception))
+        self.assertEqual(run.call_count, 1)
 
     def test_rate_limit_stops_immediately_and_persists_until_reset(self):
         self.service.config.pop('git')
@@ -215,6 +319,34 @@ class UpdaterNetworkTests(unittest.TestCase):
         (release / 'updater-bootstrap.py').write_text('raise AssertionError("Unaccepted transport")', encoding='utf-8')
         loaded = bootstrap.load_implementation(self.root)
         self.assertEqual(Path(loaded.__file__), self.root / 'legacy-updater.py')
+
+
+class ExistingGitCredentialTests(unittest.TestCase):
+    def test_noninteractive_helper_output_is_only_returned_in_memory(self):
+        with patch.object(bootstrap.subprocess, 'run', return_value=subprocess.CompletedProcess(
+                [], 0, 'protocol=https\nhost=github.com\nusername=example\npassword=fixture-token\n', '')) as run:
+            self.assertEqual(bootstrap.github_credential({'git': 'git.exe', 'repository': 'example/workbench'}),
+                             'fixture-token')
+        self.assertIn('credential.interactive=never', run.call_args.args[0])
+        self.assertIn('core.askPass=', run.call_args.args[0])
+        self.assertEqual(run.call_args.kwargs['input'],
+                         'protocol=https\nhost=github.com\npath=example/workbench.git\n\n')
+        self.assertEqual(run.call_args.kwargs['env']['GCM_INTERACTIVE'], 'never')
+        self.assertEqual(run.call_args.kwargs['env']['GIT_TERMINAL_PROMPT'], '0')
+        self.assertEqual(run.call_args.kwargs['env']['GIT_ASKPASS'], '')
+        self.assertEqual(run.call_args.kwargs['env']['SSH_ASKPASS'], '')
+        self.assertEqual(run.call_args.kwargs['timeout'], 10)
+
+    def test_missing_unavailable_and_unsafe_credentials_use_the_public_transport(self):
+        config = {'git': 'git.exe', 'repository': 'example/workbench'}
+        self.assertIsNone(bootstrap.github_credential({}))
+        for result in (FileNotFoundError(), subprocess.TimeoutExpired('git', 10),
+                       subprocess.CompletedProcess([], 1, 'password=fixture-token\n', ''),
+                       subprocess.CompletedProcess([], 0, 'username=example\n', ''),
+                       subprocess.CompletedProcess([], 0, 'password=bad\x01token\n', '')):
+            with self.subTest(result=type(result).__name__), \
+                    patch.object(bootstrap.subprocess, 'run', side_effect=[result]):
+                self.assertIsNone(bootstrap.github_credential(config))
 
 
 if __name__ == '__main__':

@@ -82,9 +82,13 @@ Windows 另外运行 `python -m unittest discover -s tests -p 'test_windows_*.py
 
 稳定入口 `ops/windows/updater-bootstrap.py` 同时负责 GitHub 网络访问，不修改已接受发布目录中的源码。已验证的原生发布在维护阶段原子刷新安装目录的 `update-windows.py`，后续进程从已接受版本加载核心与网络逻辑；待验证或旧版发布不会刷新入口。需要手动修复入口时，先备份原入口、配置和任务定义，再使用已接受版本的文件；任务名称、参数和业务数据目录保持原样。
 
-入口优先采用明确设置的代理环境变量；没有 HTTP/HTTPS/ALL 代理时读取 Windows 已启用的 Internet 代理设置，`NO_PROXY` 单独存在不会阻止读取系统代理。不改变系统代理、不读取或保存 GitHub 凭据。TLS 协商异常允许一次 TLS 1.2 重试，始终验证证书。
+入口优先采用明确设置的代理环境变量；没有 HTTP/HTTPS/ALL 代理时读取 Windows 已启用的 Internet 代理设置，`NO_PROXY` 单独存在不会阻止读取系统代理。不改变系统代理。TLS 协商异常允许一次 TLS 1.2 重试，始终验证证书。
+
+REST 查询通过 Git 的 `credential fill` 非交互复用当前用户已有的 GitHub 登录；禁用终端、askpass 和 GCM 登录提示，没有可用登录时继续使用公开接口。凭据仅保留在检查进程内存中，通过标准输入传给 curl，只发往 `api.github.com`，API 不跟随重定向；凭据不进入命令参数、配置、状态文件或日志。不会创建或更改 Git 凭据。已有登录被 GitHub 拒绝时报告 HTTP 401，需要通过原来的 Git 登录方式更新授权。
 
 安装配置可用 `git` 指定已存在的 Git 可执行文件。此时每分钟用 `ls-remote` 读取精确分支，分支未变化不消耗 REST API 额度；只有发现新提交才查询版本比较与 CI。未配置 Git 或 Git 请求失败时使用 REST，每五分钟最多开始一轮查询，健康维护与备份仍按每分钟任务执行。匿名 REST 的共享出口额度可能被其他应用耗尽：遇到 `403` 配额归零或 `429` 时遵守 `X-RateLimit-Reset`/`Retry-After`，把等待时间持久化到安装目录的 `github-network.json`，后续任务到期再试，不立即重复失败请求。普通权限错误仍报告失败。等待期间保留当前健康版本，不能以网络恢复代替 CI 成功。
+
+明确的匿名主配额耗尽（HTTP 403、剩余额度为零、有效重置时间且没有 `Retry-After`）只限制匿名预算，可以使用已有登录的独立预算。HTTP 429、`Retry-After`、无法确定原因的旧冷却记录以及已认证限流均继续等待，不通过切换认证方式提前重试。参见 [GitHub 官方限流说明](https://docs.github.com/en/rest/using-the-rest-api/rate-limits-for-the-rest-api)。
 
 这是持续自动更新，检查间隔约一分钟，还需要 CI、构建及健康检查时间，不保证提交后立即上线。GitHub 不可访问、CI 失败或服务主动停止时保留当前版本，后续检查重试。
 

@@ -47,6 +47,29 @@ def response_headers(path):
     return headers
 
 
+def github_credential(config):
+    """Reuse an existing Git sign-in without prompting or persisting its secret."""
+    if not config.get('git'):
+        return None
+    try:
+        result = subprocess.run([config['git'], '-c', 'credential.interactive=never', '-c', 'core.askPass=',
+                                 'credential', 'fill'],
+                                input='protocol=https\nhost=github.com\npath='
+                                      + config['repository'] + '.git\n\n',
+                                env={**network_environment(), 'GIT_ASKPASS': '', 'SSH_ASKPASS': ''},
+                                capture_output=True, text=True,
+                                encoding='utf-8', errors='replace', timeout=10,
+                                creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if result.returncode:
+        return None
+    fields = dict(line.split('=', 1) for line in result.stdout.splitlines() if '=' in line)
+    secret = fields.get('password', '')
+    # A credential must fit in a single HTTP header. Never log helper output.
+    return secret if secret and all(32 < ord(char) < 127 for char in secret) else None
+
+
 def install_transport(module):
     """Repair transport at the stable entry point; retain accepted deployment rules."""
     original = module.Deployment
@@ -60,28 +83,53 @@ def install_transport(module):
         def save_network(self, state):
             module.write_json(self.root / 'github-network.json', state)
 
+        def api_credential(self):
+            if not hasattr(self, '_github_credential'):
+                self._github_credential = github_credential(self.config)
+            return self._github_credential
+
+        def api_state(self):
+            state = self.network_state()
+            authentication = 'git-credential' if self.api_credential() else 'anonymous'
+            # Only a proven anonymous primary quota has a separate budget.
+            # Retry-After, secondary limits and legacy unknown deadlines still
+            # apply when a sign-in becomes available or unavailable.
+            if state.get('authentication', 'anonymous') == 'anonymous' \
+                    and authentication == 'git-credential' and state.get('limitScope') == 'anonymous':
+                state = {name: self.config[name] for name in ('repository', 'branch')}
+            return {**state, 'authentication': authentication}
+
         def defer_until(self, timestamp):
             deadline = time.strftime('%Y-%m-%d %H:%M:%S UTC', time.gmtime(timestamp))
             raise UpdateDeferred('GitHub check deferred until ' + deadline, timestamp)
 
         def download(self, url, destination):
+            api = url.startswith('https://api.github.com/')
+            credential = self.api_credential() if api else None
             with tempfile.TemporaryDirectory(dir=self.root) as directory:
                 headers_path = Path(directory) / 'headers.txt'
                 for attempt in range(2):
-                    arguments = [str(self.config['curl']), '--fail', '--silent', '--show-error',
-                                 '--location', '--retry', '0', '--connect-timeout', '10',
+                    arguments = [str(self.config['curl']), '--disable', '--fail', '--silent', '--show-error',
+                                 '--retry', '0', '--connect-timeout', '10',
                                  '--max-time', '45', '--user-agent', 'AI-WQS-Windows-Deployer',
                                  '--dump-header', str(headers_path), '--output', str(destination)]
+                    if not api:
+                        arguments += ['--location']
+                    if credential:
+                        # stdin keeps the token out of process arguments and files.
+                        # API redirects are refused so it cannot reach another host.
+                        arguments += ['--header', '@-']
                     # Some Windows proxy paths fail TLS negotiation; keep certificate checks.
                     if attempt:
                         arguments += ['--tlsv1.2', '--tls-max', '1.2']
                     headers_path.write_text('', encoding='utf-8')
                     result = subprocess.run(arguments + [url], env=network_environment(),
+                                            input='Authorization: Bearer ' + credential + '\n' if credential else None,
                                             capture_output=True, text=True, encoding='utf-8', errors='replace',
                                             creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
                     headers = response_headers(headers_path)
                     status = headers.get(':status')
-                    if url.startswith('https://api.github.com/') and (
+                    if api and (
                             status == '429' or status == '403' and (
                                 headers.get('x-ratelimit-remaining') == '0' or 'retry-after' in headers)):
                         deadline = time.time() + 60
@@ -92,11 +140,25 @@ def install_transport(module):
                                                else time.time() + value + 5)
                             except (KeyError, ValueError):
                                 pass
-                        state = self.network_state()
+                        state = self.api_state()
                         state['retryAt'] = deadline
+                        state['limitScope'] = 'shared'
+                        try:
+                            if status == '403' and headers.get('x-ratelimit-remaining') == '0' and 'retry-after' not in headers \
+                                    and float(headers['x-ratelimit-reset']) > time.time():
+                                state['limitScope'] = state['authentication']
+                        except (KeyError, ValueError):
+                            pass
                         self.save_network(state)
                         self.defer_until(deadline)
                     if result.returncode == 0:
+                        if api and status and not 200 <= int(status) < 300:
+                            raise RuntimeError('Unexpected GitHub API HTTP ' + status)
+                        if api:
+                            state = self.api_state()
+                            state.pop('retryAt', None)
+                            state.pop('limitScope', None)
+                            self.save_network(state)
                         return
                     transient = result.returncode in (5, 6, 7, 18, 28, 35, 52, 55, 56) or status in ('500', '502', '503', '504')
                     if attempt or not transient:
@@ -106,11 +168,10 @@ def install_transport(module):
 
         def github(self, suffix):
             state = self.network_state()
-            # No deployment proof can be fetched during a hard API cooldown.
-            # Return before launching Git so the shared management lock is free
-            # promptly, while update() still performs normal maintenance.
             if state.get('retryAt', 0) > time.time():
-                self.defer_until(state['retryAt'])
+                state = self.api_state()
+                if state.get('retryAt', 0) > time.time():
+                    self.defer_until(state['retryAt'])
             branch = 'git/ref/heads/'
             if self.config.get('git') and suffix.startswith(branch):
                 reference = 'refs/heads/' + self.config['branch']
@@ -127,9 +188,11 @@ def install_transport(module):
                     fields = result.stdout.strip().split()
                     if len(fields) != 2 or not re.fullmatch('[0-9a-f]{40}', fields[0]) or fields[1] != reference:
                         raise RuntimeError('Git returned an invalid branch revision')
+                    if state.get('authentication') == 'git-credential' and state != self.network_state():
+                        self.save_network(state)
                     return {'object': {'sha': fields[0]}}
                 print('Git branch check unavailable; trying the scheduled REST check.', flush=True)
-            state = self.network_state()
+            state = self.api_state()
             if state.get('retryAt', 0) > time.time():
                 self.defer_until(state['retryAt'])
             if not getattr(self, '_api_poll_started', False):
